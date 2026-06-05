@@ -965,7 +965,7 @@ f_prop_add_list(typval_T *argvars, typval_T *rettv UNUSED)
     // This must be done _before_ we start adding properties because property
     // changes trigger buffer (memline) reorganisation, which needs this flag
     // to be correctly set.
-    buf->b_has_textprop = TRUE;  // this is never reset
+    buf->b_has_textprop = true;  // this is never reset
     FOR_ALL_LIST_ITEMS(argvars[1].vval.v_list, li)
     {
 	if (li->li_tv.v_type != VAR_LIST || li->li_tv.vval.v_list == NULL)
@@ -1187,7 +1187,7 @@ prop_add_common(
     // This must be done _before_ we add the property because property changes
     // trigger buffer (memline) reorganisation, which needs this flag to be
     // correctly set.
-    buf->b_has_textprop = TRUE;  // this is never reset
+    buf->b_has_textprop = true;  // this is never reset
 
     prop_add_one(buf, type_name, id, text, text_padding_left, flags,
 				    start_lnum, end_lnum, start_col, end_col);
@@ -1396,25 +1396,28 @@ sort_text_props(
 }
 
 /*
- * Find text property "type_id" in the visible lines of window "wp".
- * Match "id" when it is > 0.
- * Returns false when not found.
+ * Find text property "type_id" in lines [first_lnum, last_lnum] of window
+ * "wp"'s buffer.  Match "id" when it is > 0.  Returns false when not found.
  */
     bool
-find_visible_prop(
+find_prop_in_lines(
 	win_T	    *wp,
 	int	    type_id,
 	int	    id,
 	textprop_T  *prop,
-	linenr_T    *found_lnum)
+	linenr_T    *found_lnum,
+	linenr_T    first_lnum,
+	linenr_T    last_lnum)
 {
-    // return when "type_id" no longer exists
     if (text_prop_type_by_id(wp->w_buffer, type_id) == NULL)
 	return false;
 
-    // w_botline may not have been updated yet.
-    validate_botline_win(wp);
-    for (linenr_T lnum = wp->w_topline; lnum < wp->w_botline; ++lnum)
+    if (first_lnum < 1)
+	first_lnum = 1;
+    if (last_lnum > wp->w_buffer->b_ml.ml_line_count)
+	last_lnum = wp->w_buffer->b_ml.ml_line_count;
+
+    for (linenr_T lnum = first_lnum; lnum <= last_lnum; ++lnum)
     {
 	char_u	*props;
 	int	count = get_text_props(wp->w_buffer, lnum, &props, FALSE);
@@ -1430,6 +1433,25 @@ find_visible_prop(
 	}
     }
     return false;
+}
+
+/*
+ * Find text property "type_id" in the visible lines of window "wp".
+ * Match "id" when it is > 0.
+ * Returns false when not found.
+ */
+    bool
+find_visible_prop(
+	win_T	    *wp,
+	int	    type_id,
+	int	    id,
+	textprop_T  *prop,
+	linenr_T    *found_lnum)
+{
+    // w_botline may not have been updated yet.
+    validate_botline_win(wp);
+    return find_prop_in_lines(wp, type_id, id, prop, found_lnum,
+					  wp->w_topline, wp->w_botline - 1);
 }
 
 /*
@@ -1727,23 +1749,26 @@ prop_fill_dict(dict_T *dict, textprop_T *prop, buf_T *buf)
 	dict_add_number(dict, "type_bufnr", 0);
     if (virtualtext_prop)
     {
+	string_T    text_align = {NULL, 0};
+
 	// virtual text property - u.tp_text must be set by caller
 	dict_add_string(dict, "text", prop->u.tp_text);
 
 	// text_align
-	char_u	    *text_align = NULL;
 	if (prop->tp_flags & TP_FLAG_ALIGN_RIGHT)
-	    text_align = (char_u *)"right";
+	    STR_LITERAL_SET(text_align, "right");
 	else if (prop->tp_flags & TP_FLAG_ALIGN_ABOVE)
-	    text_align = (char_u *)"above";
+	    STR_LITERAL_SET(text_align, "above");
 	else if (prop->tp_flags & TP_FLAG_ALIGN_BELOW)
-	    text_align = (char_u *)"below";
-	if (text_align != NULL)
-	    dict_add_string(dict, "text_align", text_align);
+	    STR_LITERAL_SET(text_align, "below");
+	if (text_align.string != NULL)
+	    dict_add_string_len(dict, "text_align",
+		text_align.string, (int)text_align.length);
 
 	// text_wrap
 	if (prop->tp_flags & TP_FLAG_WRAP)
-	    dict_add_string(dict, "text_wrap", (char_u *)"wrap");
+	    dict_add_string_len(dict, "text_wrap",
+		(char_u *)"wrap", STRLEN_LITERAL("wrap"));
 	if (prop->tp_padleft != 0)
 	    dict_add_number(dict, "text_padding_left", prop->tp_padleft);
     }
@@ -1964,12 +1989,16 @@ f_prop_find(typval_T *argvars, typval_T *rettv)
 	    // after `col`, depending on the search direction.
 	    if (lnum == lnum_start)
 	    {
+		bool is_floating_vtext = prop.tp_id < 0
+		    && prop.tp_col == MAXCOL;
 		if (dir == BACKWARD)
 		{
-		    if (prop.tp_col > col)
+		    // Virtual text with MAXCOL always matches any column
+		    if (!is_floating_vtext && prop.tp_col > col)
 			continue;
 		}
-		else if (prop.tp_col + prop.tp_len - (prop.tp_len != 0) < col)
+		else if (!is_floating_vtext
+		    && prop.tp_col + prop.tp_len - (prop.tp_len != 0) < col)
 		    continue;
 	    }
 	    if (both ? prop.tp_id == id && prop.tp_type == type_id

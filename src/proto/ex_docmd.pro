@@ -48,7 +48,7 @@ void ex_stop(exarg_T *eap);
 void handle_drop(int filec, char_u **filev, int split, void (*callback)(void *), void *cookie);
 void handle_any_postponed_drop(void);
 void ex_edit(exarg_T *eap);
-int expand_findfunc(char_u *pat, char_u ***files, int *numMatches);
+int expand_findfunc(expand_T *xp, char_u *pat, char_u ***files, int *numMatches);
 char *did_set_findfunc(optset_T *args);
 void free_findfunc_option(void);
 int set_ref_in_findfunc(int copyID);

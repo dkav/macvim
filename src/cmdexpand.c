@@ -36,7 +36,7 @@ static int compl_match_arraysize;
 static int compl_startcol;
 static int compl_selected;
 // cmdline before expansion
-static char_u *cmdline_orig = NULL;
+static string_T cmdline_orig = {NULL, 0};
 
 #define SHOW_MATCH(m) (showtail ? showmatches_gettail(matches[m]) : matches[m])
 
@@ -338,11 +338,15 @@ nextwild(
     // Save cmdline before inserting selected item
     if (!wild_navigate && ccline->cmdbuff != NULL)
     {
-	vim_free(cmdline_orig);
-	cmdline_orig = vim_strnsave(ccline->cmdbuff, ccline->cmdlen);
+	vim_free(cmdline_orig.string);
+	cmdline_orig.string = vim_strnsave(ccline->cmdbuff, ccline->cmdlen);
+	if (cmdline_orig.string == NULL)
+	    cmdline_orig.length = 0;
+	else
+	    cmdline_orig.length = ccline->cmdlen;
     }
 
-    if (p != NULL && !got_int && !(options & WILD_NOSELECT))
+    if (p != NULL && !got_int && !(options & (WILD_NOSELECT | WILD_NOINSERT)))
     {
 	size_t	plen = STRLEN(p);
 	int	difflen;
@@ -376,7 +380,8 @@ nextwild(
 
     if (xp->xp_numfiles <= 0 && p == NULL)
 	beep_flush();
-    else if (xp->xp_numfiles == 1 && !(options & WILD_NOSELECT)
+    else if (xp->xp_numfiles == 1
+	    && !(options & (WILD_NOSELECT | WILD_NOINSERT))
 	    && !wild_navigate)
 	// free expanded pattern
 	(void)ExpandOne(xp, NULL, NULL, 0, WILD_FREE);
@@ -407,10 +412,16 @@ cmdline_pum_create(
     compl_match_arraysize = numMatches;
     for (int i = 0; i < numMatches; i++)
     {
-	compl_match_array[i].pum_text = SHOW_MATCH(i);
-	compl_match_array[i].pum_info = NULL;
-	compl_match_array[i].pum_extra = NULL;
-	compl_match_array[i].pum_kind = NULL;
+	compl_match_array[i].pum_text = (xp->xp_files_abbr != NULL
+				    && xp->xp_files_abbr[i] != NULL)
+					? xp->xp_files_abbr[i]
+					: SHOW_MATCH(i);
+	compl_match_array[i].pum_info = xp->xp_files_info != NULL
+					    ? xp->xp_files_info[i] : NULL;
+	compl_match_array[i].pum_extra = xp->xp_files_menu != NULL
+					    ? xp->xp_files_menu[i] : NULL;
+	compl_match_array[i].pum_kind = xp->xp_files_kind != NULL
+					    ? xp->xp_files_kind[i] : NULL;
 	compl_match_array[i].pum_user_abbr_hlattr = -1;
 	compl_match_array[i].pum_user_kind_hlattr = -1;
     }
@@ -432,6 +443,8 @@ cmdline_pum_create(
     void
 cmdline_pum_display(void)
 {
+    if (p_po > 0 && p_po < 100 && !pum_redraw_in_same_position())
+	pum_call_update_screen();
     pum_display(compl_match_array, compl_match_arraysize, compl_selected);
 }
 
@@ -458,6 +471,7 @@ cmdline_pum_remove(cmdline_info_T *cclp UNUSED, int defer_redraw)
 	RedrawingDisabled = 0;
 #endif
 
+    term_set_sync_output(TERM_SYNC_OUTPUT_ENABLE);
     pum_undisplay();
     VIM_CLEAR(compl_match_array);
     compl_match_arraysize = 0;
@@ -471,6 +485,7 @@ cmdline_pum_remove(cmdline_info_T *cclp UNUSED, int defer_redraw)
     else
 	pum_call_update_screen();
     redrawcmd();
+    term_set_sync_output(TERM_SYNC_OUTPUT_DISABLE);
 
     // When a function is called (e.g. for 'foldtext') KeyTyped might be reset
     // as a side effect.
@@ -1012,6 +1027,31 @@ find_longest_match(expand_T *xp, int options)
     return ss;
 }
 
+    void
+free_xp_files_extra(expand_T *xp, int numfiles)
+{
+    if (xp->xp_files_abbr != NULL)
+    {
+	FreeWild(numfiles, xp->xp_files_abbr);
+	xp->xp_files_abbr = NULL;
+    }
+    if (xp->xp_files_kind != NULL)
+    {
+	FreeWild(numfiles, xp->xp_files_kind);
+	xp->xp_files_kind = NULL;
+    }
+    if (xp->xp_files_menu != NULL)
+    {
+	FreeWild(numfiles, xp->xp_files_menu);
+	xp->xp_files_menu = NULL;
+    }
+    if (xp->xp_files_info != NULL)
+    {
+	FreeWild(numfiles, xp->xp_files_info);
+	xp->xp_files_info = NULL;
+    }
+}
+
 /*
  * Do wildcard expansion on the string "str".
  * Chars that should not be expanded must be preceded with a backslash.
@@ -1078,6 +1118,7 @@ ExpandOne(
     if (xp->xp_numfiles != -1 && mode != WILD_ALL && mode != WILD_LONGEST)
     {
 	FreeWild(xp->xp_numfiles, xp->xp_files);
+	free_xp_files_extra(xp, xp->xp_numfiles);
 	xp->xp_numfiles = -1;
 	VIM_CLEAR(xp->xp_orig);
 
@@ -1179,6 +1220,7 @@ ExpandCleanup(expand_T *xp)
 {
     if (xp->xp_numfiles >= 0)
     {
+	free_xp_files_extra(xp, xp->xp_numfiles);
 	FreeWild(xp->xp_numfiles, xp->xp_files);
 	xp->xp_numfiles = -1;
     }
@@ -1188,7 +1230,7 @@ ExpandCleanup(expand_T *xp)
     void
 clear_cmdline_orig(void)
 {
-    VIM_CLEAR(cmdline_orig);
+    VIM_CLEAR_STRING(cmdline_orig);
 }
 
 /*
@@ -1247,7 +1289,7 @@ showmatches_oneline(
 		// Expansion was done before and special characters
 		// were escaped, need to halve backslashes.  Also
 		// $HOME has been replaced with ~/.
-		exp_path = expand_env_save_opt(matches[j], TRUE);
+		exp_path = expand_env_save_opt(matches[j], TRUE, NULL);
 		path = exp_path != NULL ? exp_path : matches[j];
 		halved_slash = backslash_halve_save(path);
 		isdir = mch_isdir(halved_slash != NULL ? halved_slash
@@ -1289,7 +1331,11 @@ showmatches_oneline(
  *   inserted as a normal character.
  */
     int
-showmatches(expand_T *xp, int display_wildmenu, int display_list, int noselect)
+showmatches(
+    expand_T	*xp,
+    int		display_wildmenu,
+    int		display_list,
+    int		wim_flags_arg)
 {
     cmdline_info_T	*ccline = get_cmdline_info();
     int		numMatches;
@@ -1300,6 +1346,9 @@ showmatches(expand_T *xp, int display_wildmenu, int display_list, int noselect)
     int		columns;
     int		attr;
     int		showtail;
+    int		noselect = (wim_flags_arg & WIM_NOSELECT);
+    int		noinsert = (wim_flags_arg & WIM_NOINSERT);
+    int		cmdline_unchanged = noselect || noinsert;
 
     if (xp->xp_numfiles == -1)
     {
@@ -1322,7 +1371,7 @@ showmatches(expand_T *xp, int display_wildmenu, int display_list, int noselect)
 	    && vim_strchr(p_wop, WOP_PUM) != NULL)
     {
 	int retval = cmdline_pum_create(ccline, xp, matches, numMatches,
-		showtail && !noselect);
+		showtail && !cmdline_unchanged);
 	if (retval == EXPAND_OK)
 	{
 	    compl_selected = noselect ? -1 : 0;
@@ -1408,7 +1457,10 @@ showmatches(expand_T *xp, int display_wildmenu, int display_list, int noselect)
     }
 
     if (xp->xp_numfiles == -1)
+    {
 	FreeWild(numMatches, matches);
+	free_xp_files_extra(xp, numMatches);
+    }
 
     return EXPAND_OK;
 }
@@ -1707,11 +1759,12 @@ set_cmd_index(char_u *cmd, exarg_T *eap, expand_T *xp, int *complp)
     // Isolate the command and search for it in the command table.
     // Exceptions:
     // - the 'k' command can directly be followed by any character, but do
-    // accept "keepmarks", "keepalt" and "keepjumps". As fuzzy matching can
-    // find matches anywhere in the command name, do this only for command
-    // expansion based on regular expression and not for fuzzy matching.
+    // accept "keepmarks", "keepalt" and "keepjumps". Bypass also when
+    // 'ignorecase' is set so a lowercase ":kz" still completes a user
+    // command like :Kz (#20241), and for fuzzy matching as that can find
+    // matches anywhere in the command name.
     // - the 's' command can be followed directly by 'c', 'g', 'i', 'I' or 'r'
-    if (!fuzzy && (*cmd == 'k' && cmd[1] != 'e'))
+    if (!fuzzy && !p_ic && (*cmd == 'k' && cmd[1] != 'e'))
     {
 	eap->cmdidx = CMD_k;
 	p = cmd + 1;
@@ -1826,9 +1879,7 @@ set_context_for_wildcard_arg(
 	// An argument can contain just about everything, except
 	// characters that end the command and white space.
 	else if (c == '|' || c == '\n' || c == '"' || (VIM_ISWHITE(c)
-#ifdef SPACE_IN_FILENAME
 		    && (!(eap != NULL && (eap->argt & EX_NOSPC)) || usefilter)
-#endif
 		    ))
 	{
 	    len = 0;  // avoid getting stuck when space is in 'isfname'
@@ -3115,7 +3166,7 @@ expand_files_and_dirs(
     if (xp->xp_context == EXPAND_FINDFUNC)
     {
 #ifdef FEAT_EVAL
-	ret = expand_findfunc(pat, matches, numMatches);
+	ret = expand_findfunc(xp, pat, matches, numMatches);
 #endif
     }
     else
@@ -4110,6 +4161,110 @@ ExpandUserDefined(
     return OK;
 }
 
+    void
+expand_process_user_list(
+    list_T	*retlist,
+    char_u	***matches,
+    int		*numMatches,
+    expand_T	*xp)
+{
+    listitem_T	*li;
+    garray_T	ga;
+    garray_T	ga_abbr;
+    garray_T	ga_kind;
+    garray_T	ga_menu;
+    garray_T	ga_info;
+    int		have_extra = FALSE;
+    int		i;
+
+    ga_init2(&ga, sizeof(char *), 3);
+    ga_init2(&ga_abbr, sizeof(char *), 3);
+    ga_init2(&ga_kind, sizeof(char *), 3);
+    ga_init2(&ga_menu, sizeof(char *), 3);
+    ga_init2(&ga_info, sizeof(char *), 3);
+    // Loop over the items in the list.
+    FOR_ALL_LIST_ITEMS(retlist, li)
+    {
+	typval_T *tv = &li->li_tv;
+	char_u	*p = NULL;
+	char_u	*abbr = NULL;
+	char_u	*kind = NULL;
+	char_u	*menu = NULL;
+	char_u	*info = NULL;
+
+	if (tv->v_type == VAR_STRING)
+	{
+	    if (tv->vval.v_string == NULL)
+		continue;  // Skip NULL strings
+	    p = vim_strsave(tv->vval.v_string);
+	}
+	else if (tv->v_type == VAR_DICT && tv->vval.v_dict != NULL)
+	{
+	    dict_T	*d = tv->vval.v_dict;
+	    char_u	*word = dict_get_string(d, "word", FALSE);
+
+	    if (word == NULL)
+		continue;  // "word" is required
+	    p = vim_strsave(word);
+	    abbr = dict_get_string(d, "abbr", TRUE);
+	    kind = dict_get_string(d, "kind", TRUE);
+	    menu = dict_get_string(d, "menu", TRUE);
+	    info = dict_get_string(d, "info", TRUE);
+	    if (abbr != NULL || kind != NULL || menu != NULL || info != NULL)
+		have_extra = TRUE;
+	}
+	else
+	    continue;  // Skip other types
+
+	if (p == NULL
+		|| ga_grow(&ga, 1) == FAIL
+		|| ga_grow(&ga_abbr, 1) == FAIL
+		|| ga_grow(&ga_kind, 1) == FAIL
+		|| ga_grow(&ga_menu, 1) == FAIL
+		|| ga_grow(&ga_info, 1) == FAIL)
+	{
+	    vim_free(p);
+	    vim_free(abbr);
+	    vim_free(kind);
+	    vim_free(menu);
+	    vim_free(info);
+	    break;
+	}
+
+	((char_u **)ga.ga_data)[ga.ga_len++] = p;
+	((char_u **)ga_abbr.ga_data)[ga_abbr.ga_len++] = abbr;
+	((char_u **)ga_kind.ga_data)[ga_kind.ga_len++] = kind;
+	((char_u **)ga_menu.ga_data)[ga_menu.ga_len++] = menu;
+	((char_u **)ga_info.ga_data)[ga_info.ga_len++] = info;
+    }
+
+    *matches = ga.ga_data;
+    *numMatches = ga.ga_len;
+    if (have_extra && ga.ga_len > 0)
+    {
+	xp->xp_files_abbr = (char_u **)ga_abbr.ga_data;
+	xp->xp_files_kind = (char_u **)ga_kind.ga_data;
+	xp->xp_files_menu = (char_u **)ga_menu.ga_data;
+	xp->xp_files_info = (char_u **)ga_info.ga_data;
+    }
+    else
+    {
+	// No extra info collected; free the placeholder NULL entries.
+	for (i = 0; i < ga_abbr.ga_len; i++)
+	    vim_free(((char_u **)ga_abbr.ga_data)[i]);
+	vim_free(ga_abbr.ga_data);
+	for (i = 0; i < ga_kind.ga_len; i++)
+	    vim_free(((char_u **)ga_kind.ga_data)[i]);
+	vim_free(ga_kind.ga_data);
+	for (i = 0; i < ga_menu.ga_len; i++)
+	    vim_free(((char_u **)ga_menu.ga_data)[i]);
+	vim_free(ga_menu.ga_data);
+	for (i = 0; i < ga_info.ga_len; i++)
+	    vim_free(((char_u **)ga_info.ga_data)[i]);
+	vim_free(ga_info.ga_data);
+    }
+}
+
 /*
  * Expand names with a list returned by a function defined by the user.
  */
@@ -4120,8 +4275,6 @@ ExpandUserList(
     int		*numMatches)
 {
     list_T      *retlist;
-    listitem_T	*li;
-    garray_T	ga;
 
     *matches = NULL;
     *numMatches = 0;
@@ -4129,32 +4282,8 @@ ExpandUserList(
     if (retlist == NULL)
 	return FAIL;
 
-    ga_init2(&ga, sizeof(char *), 3);
-    // Loop over the items in the list.
-    FOR_ALL_LIST_ITEMS(retlist, li)
-    {
-	char_u	*p;
-
-	if (li->li_tv.v_type != VAR_STRING || li->li_tv.vval.v_string == NULL)
-	    continue;  // Skip non-string items and empty strings
-
-	p = vim_strsave(li->li_tv.vval.v_string);
-	if (p == NULL)
-	    break;
-
-	if (ga_grow(&ga, 1) == FAIL)
-	{
-	    vim_free(p);
-	    break;
-	}
-
-	((char_u **)ga.ga_data)[ga.ga_len] = p;
-	++ga.ga_len;
-    }
+    expand_process_user_list(retlist, matches, numMatches, xp);
     list_unref(retlist);
-
-    *matches = ga.ga_data;
-    *numMatches = ga.ga_len;
     return OK;
 }
 #endif
@@ -4727,7 +4856,8 @@ f_cmdcomplete_info(typval_T *argvars UNUSED, typval_T *rettv)
 	    || ccline->xpc == NULL || ccline->xpc->xp_files == NULL)
 	return;
     retdict = rettv->vval.v_dict;
-    ret = dict_add_string(retdict, "cmdline_orig", cmdline_orig);
+    ret = dict_add_string_len(retdict, "cmdline_orig",
+	cmdline_orig.string, (int)cmdline_orig.length);
     if (ret == OK)
 	ret = dict_add_number(retdict, "pum_visible", pum_visible());
     if (ret == OK)
@@ -4776,7 +4906,7 @@ copy_substring_from_pos(pos_T *start, pos_T *end, char_u **match,
     segment_len = is_single_line ? (end->col - start->col)
 			: (int)(ml_get_len(start->lnum) - start->col);
     if (ga_grow(&ga, segment_len + 2) != OK)
-	return FAIL;
+	goto fail;
 
     ga_concat_len(&ga, start_ptr, segment_len);
     if (!is_single_line)
@@ -4797,7 +4927,7 @@ copy_substring_from_pos(pos_T *start, pos_T *end, char_u **match,
 	    line = ml_get(lnum);
 	    linelen = (int)ml_get_len(lnum);
 	    if (ga_grow(&ga, linelen + 2) != OK)
-		return FAIL;
+		goto fail;
 	    ga_concat_len(&ga, line, linelen);
 	    if (exacttext)
 		GA_CONCAT_LITERAL(&ga, "\\n");
@@ -4811,13 +4941,13 @@ copy_substring_from_pos(pos_T *start, pos_T *end, char_u **match,
     word_end = find_word_end(end_line + end->col);
     segment_len = (int)(word_end - end_line);
     if (ga_grow(&ga, segment_len) != OK)
-	return FAIL;
+	goto fail;
     ga_concat_len(&ga, end_line + (is_single_line ? end->col : 0),
 	    segment_len - (is_single_line ? end->col : 0));
 
     // Null-terminate
     if (ga_grow(&ga, 1) != OK)
-	return FAIL;
+	goto fail;
     ga_append(&ga, NUL);
 
     *match = (char_u *)ga.ga_data;
@@ -4825,6 +4955,10 @@ copy_substring_from_pos(pos_T *start, pos_T *end, char_u **match,
     match_end->col = segment_len;
 
     return OK;
+
+fail:
+    ga_clear(&ga);
+    return FAIL;
 }
 
 /*
@@ -5020,8 +5154,8 @@ expand_pattern_in_buf(
 	}
 
 	// Extract the matching text prepended to completed word
-	if (!copy_substring_from_pos(&cur_match_pos, &end_match_pos, &full_match,
-		    &word_end_pos))
+	if (copy_substring_from_pos(&cur_match_pos, &end_match_pos, &full_match,
+		    &word_end_pos) == FAIL)
 	    break;
 
 	if (exacttext)
@@ -5062,7 +5196,10 @@ expand_pattern_in_buf(
 	if (match != NULL)
 	{
 	    if (ga_grow(&ga, 1) == FAIL)
+	    {
+		VIM_CLEAR(match);
 		goto cleanup;
+	    }
 	    ((char_u **)ga.ga_data)[ga.ga_len++] = match;
 	    if (ga.ga_len > TAG_MANY)
 		break;

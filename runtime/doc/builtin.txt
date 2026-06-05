@@ -1,4 +1,4 @@
-*builtin.txt*	For Vim version 9.2.  Last change: 2026 Apr 06
+*builtin.txt*	For Vim version 9.2.  Last change: 2026 May 31
 
 
 		  VIM REFERENCE MANUAL	  by Bram Moolenaar
@@ -107,7 +107,8 @@ ch_getbufnr({handle}, {what})	Number	get buffer number for {handle}/{what}
 ch_getjob({channel})		Job	get the Job of {channel}
 ch_info({handle})		Dict	info about channel {handle}
 ch_listen({address} [, {options}])
-				Channel	listen on {address}
+				Channel	listen on {address} - port on loopback
+					or UNIX domain socket
 ch_log({msg} [, {handle}])	none	write {msg} in the channel log file
 ch_logfile({fname} [, {mode}])	none	start logging channel activity
 ch_open({address} [, {options}])
@@ -706,6 +707,8 @@ tabpagebuflist([{arg}])		List	list of buffer numbers in tab page
 tabpagenr([{arg}])		Number	number of current or last tab page
 tabpagewinnr({tabarg} [, {arg}])
 				Number	number of current window in tab page
+tabpanel_getinfo()		Dict	get current state of the tabpanel
+tabpanel_scroll({n} [, {opts}])	Bool	scroll the tabpanel
 tagfiles()			List	tags files used
 taglist({expr} [, {filename}])	List	list of tags matching {expr}
 tan({expr})			Float	tangent of {expr}
@@ -3671,14 +3674,22 @@ fullcommand({name} [, {vim9}])				*fullcommand()*
 		ambiguous (for user-defined commands) or cannot be shortened
 		this way. |vim9-no-shorten|
 
-		Without the {vim9} argument uses the current script version.
-		If {vim9} is present and FALSE then legacy script rules are
-		used.  When {vim9} is present and TRUE then Vim9 rules are
-		used, e.g. "en" is not a short form of "endif".
+		Without the {vim9} argument, the current script version is
+		used.  When {vim9} is present and FALSE, legacy script rules
+		are used.  When {vim9} is present and TRUE, Vim9 rules are
+		used (e.g., "en" is not a short form of "endif").
 
-		For example `fullcommand('s')`, `fullcommand('sub')`,
-		`fullcommand(':%substitute')` all return "substitute".
-
+		Note: Command validation is not performed.  Results depend on
+		Vim's internal command-specific identification rules.
+		Examples:
+>vim
+		  echo [fullcommand('s')]		|" ['substitute']
+		  echo [fullcommand('sub')]		|" ['substitute']
+		  echo [fullcommand(': mark word')]	|" ['mark']
+		  echo [fullcommand(': markword')]	|" ['']
+		  echo [fullcommand('en')]		|" ['endif']
+		  echo [fullcommand('en', v:true)]	|" ['']
+<
 		Can also be used as a |method|: >
 			GetName()->fullcommand()
 <
@@ -6260,7 +6271,7 @@ insert({object}, {item} [, {idx}])			*insert()*
 		Return type: |Number|
 
 
-instanceof({object}, {class})			*instanceof()* *E614* *E616* *E693*
+instanceof({object}, {class})			*instanceof()* *E616* *E693*
 		The result is a Number, which is |TRUE| when the {object}
 		argument is a direct or indirect instance of a |Class|,
 		|Interface|, or class |:type| alias specified by {class}.
@@ -6866,6 +6877,8 @@ listener_add({callback} [, {buf} [, {unbuffered}]])	*listener_add()*
 		second argument: >
 			GetBuffer()->listener_add(callback)
 <
+		This function is not available in the |sandbox|.
+
 		Return type: |Number|
 
 
@@ -6880,6 +6893,8 @@ listener_flush([{buf}])					*listener_flush()*
 		Can also be used as a |method|: >
 			GetBuffer()->listener_flush()
 <
+		This function is not available in the |sandbox|.
+
 		Return type: void
 
 
@@ -6891,6 +6906,8 @@ listener_remove({id})					*listener_remove()*
 		Can also be used as a |method|: >
 			GetListenerId()->listener_remove()
 <
+		This function is not available in the |sandbox|.
+
 		Return type: |Number|
 
 
@@ -8870,6 +8887,8 @@ redraw_listener_add({opts})				*redraw_listener_add()*
 		Can also be used as a |method|: >
 			GetOpts()->redraw_listener_add()
 <
+		This function is not available in the |sandbox|.
+
 		Return type: |Number|
 
 
@@ -11342,7 +11361,12 @@ strptime({format}, {timestring})			*strptime()*
 		can try different {format} values until you get a non-zero
 		result.
 
+		Note: On MS-Windows, where the C runtime does not provide
+		strptime(), Vim uses a built-in fallback that always uses
+		English locale names regardless of the active locale.
+
 		See also |strftime()|.
+
 		Examples: >
 		  :echo strptime("%Y %b %d %X", "1997 Apr 27 11:49:23")
 <		  862156163 >
@@ -11896,6 +11920,38 @@ tabpagewinnr({tabarg} [, {arg}])			*tabpagewinnr()*
 		Return type: |Number|
 
 
+tabpanel_getinfo()					*tabpanel_getinfo()*
+		Return a |Dictionary| describing the current state of the
+		tabpanel (see |tabpanel|).  The dictionary has these keys:
+			align		"left" or "right"
+			columns		width in screen columns
+			scrollbar	|TRUE| if a scrollbar is shown
+			offset		current scroll offset in rows
+			total		total number of rows rendered
+			max_offset	largest valid value for "offset"
+
+		The "total" and "max_offset" values are only accurate after
+		the tabpanel has been drawn at least once.
+
+		Return type: dict<any>
+
+
+tabpanel_scroll({n} [, {opts}])				*tabpanel_scroll()*
+		Scroll the tabpanel by {n} rows.  Positive values scroll down
+		(later tab pages become visible), negative values scroll up.
+		The new offset is clamped to the valid range.
+
+		When {opts} is a |Dictionary| and its "absolute" entry is
+		|TRUE|, {n} is used as the new absolute scroll offset instead
+		of a delta.
+
+		Returns |TRUE| if the scroll offset changed, |FALSE| otherwise
+		(for example when the tabpanel is not shown, or the offset is
+		already at the requested value).
+
+		Return type: |vim9-boolean|
+
+
 tagfiles()						*tagfiles()*
 		Returns a |List| with the file names used to search for tags
 		for the current buffer.  This is the 'tags' option expanded.
@@ -12015,6 +12071,7 @@ terminalprops()						*terminalprops()*
 		   underline_rgb	whether |t_8u| works **
 		   mouse		mouse type supported
 		   kitty		whether Kitty terminal was detected
+		   decrqm		whether sending DECRQM sequences work
 
 		** value 'u' for unknown, 'y' for yes, 'n' for no
 
@@ -12033,6 +12090,9 @@ terminalprops()						*terminalprops()*
 		This avoids sending it to xterm, which would clear the colors.
 
 		For "mouse" the value 'u' is unknown
+
+		If "decrqm" is 'y', then Vim will query support for the
+		'termsync' and 'termresize' ("inband") options.
 
 		Also see:
 		- 'ambiwidth' - detected by using |t_u7|.
@@ -13326,6 +13386,7 @@ spell			Compiled with spell checking support |spell|.
 startuptime		Compiled with |--startuptime| support.
 statusline		Compiled with support for 'statusline', 'rulerformat'
 			and special formats of 'titlestring' and 'iconstring'.
+statusline_click	Click handlers in 'statusline' |stl-%[FuncName]|
 sun			SunOS version of Vim.
 sun_workshop		Support for Sun |workshop| has been removed.
 syntax			Compiled with syntax highlighting support |syntax|.
@@ -13378,8 +13439,6 @@ vtp			Compiled for vcon support |+vtp| (check vcon to find
 			out if it works in the current console).
 wayland			Compiled with Wayland protocol support.
 wayland_clipboard	Compiled with support for Wayland clipboard.
-wayland_focus_steal	Compiled with support for Wayland clipboard focus
-			stealing.
 wildignore		Compiled with 'wildignore' option.
 wildmenu		Compiled with 'wildmenu' option.
 win16			old version for MS-Windows 3.1 (always false)

@@ -953,6 +953,10 @@ pum_redraw(void)
     // Use current window for highlight overrides when using 'winhighlight'
     override_success = push_highlight_overrides(curwin->w_hl, curwin->w_hl_len);
 
+    // Batch the underlying screen update and the pum drawing into a single
+    // synchronized output frame to avoid flicker.
+    term_set_sync_output(TERM_SYNC_OUTPUT_ENABLE);
+
     hlf_T	hlfsNorm[3];
     hlf_T	hlfsSel[3];
     // "word"/"abbr"
@@ -1187,6 +1191,8 @@ pum_redraw(void)
 
     if (override_success)
 	pop_highlight_overrides();
+
+    term_set_sync_output(TERM_SYNC_OUTPUT_DISABLE);
 }
 
 #if defined(FEAT_PROP_POPUP) && defined(FEAT_QUICKFIX)
@@ -1477,7 +1483,7 @@ pum_set_selected(int n, int repeat UNUSED)
 			// window is not resized, skip the preview window's
 			// status line redrawing.
 			if (ins_compl_active() && !resized)
-			    curwin->w_redr_status = FALSE;
+			    curwin->w_redr_status = false;
 
 			// Return cursor to where we were
 			validate_cursor();
@@ -1507,7 +1513,7 @@ pum_set_selected(int n, int repeat UNUSED)
 			// StatusLineNC for a moment and cause flicker.
 			pum_will_redraw = !resized;
 			save_redr_status = curwin_save->w_redr_status;
-			curwin_save->w_redr_status = FALSE;
+			curwin_save->w_redr_status = false;
 			update_screen(0);
 			pum_pretend_not_visible = FALSE;
 			pum_will_redraw = FALSE;
@@ -1611,8 +1617,12 @@ pum_visible(void)
     static int
 pum_in_same_position(void)
 {
+    int	    row = (State & MODE_CMDLINE)
+			? cmdline_row
+			: curwin->w_wrow + W_WINROW(curwin);
+
     return pum_window != curwin
-	    || (pum_win_row == curwin->w_wrow + W_WINROW(curwin)
+	    || (pum_win_row == row
 		&& pum_win_height == curwin->w_height
 		&& pum_win_col == curwin->w_wincol
 		&& pum_win_width == curwin->w_width);

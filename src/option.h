@@ -277,8 +277,9 @@ typedef enum {
 #define SHM_RECORDING	'q'		// short recording message
 #define SHM_FILEINFO	'F'		// no file info messages
 #define SHM_SEARCHCOUNT  'S'		// no search stats: '[1/10]'
+#define SHM_UNDO	'u'		// undo messages
 #define SHM_POSIX       "AS"		// POSIX value
-#define SHM_ALL		"rmfixlnwaWtToOsAIcCqFS" // all possible flags for 'shm'
+#define SHM_ALL		"rmfixlnwaWtToOsAIcCqFSu" // all possible flags for 'shm'
 #define SHM_LEN		30		// max length of all flags together
 					// plus a NUL character
 
@@ -364,9 +365,10 @@ typedef enum {
 #define STL_USER_HL	'*'		// highlight from (User)1..9 or 0
 #define STL_HIGHLIGHT	'#'		// highlight name
 #define STL_LINEBREAK	'@'		// insert a line break
+#define STL_CLICKFUNC	'['		// click handler region
 #define STL_TABPAGENR	'T'		// tab page label nr
 #define STL_TABCLOSENR	'X'		// tab page close nr
-#define STL_ALL		((char_u *) "fFtcvVlLknoObBrRhHmYyWwMqpPaNS{#@")
+#define STL_ALL		((char_u *) "fFtcvVlLknoObBrRhHmYyWwMqpPaNS{#@[")
 
 // flags used for parsed 'wildmode'
 #define WIM_FULL	0x01
@@ -374,6 +376,7 @@ typedef enum {
 #define WIM_LIST	0x04
 #define WIM_BUFLASTUSED	0x08
 #define WIM_NOSELECT	0x10
+#define WIM_NOINSERT	0x20
 
 // flags for the 'wildoptions' option
 // each defined char should be unique over all values.
@@ -823,6 +826,7 @@ EXTERN char_u	*p_msm;		// 'mkspellmem'
 EXTERN int	p_ml;		// 'modeline'
 EXTERN int	p_mle;		// 'modelineexpr'
 EXTERN long	p_mls;		// 'modelines'
+EXTERN int	p_mlstr;	// 'modelinestrict'
 EXTERN int	p_ma;		// 'modifiable'
 #ifdef FEAT_GUI_MACVIM
 EXTERN int	p_mmta;		// 'macmeta'
@@ -921,6 +925,7 @@ EXTERN long	p_sj;		// 'scrolljump'
 EXTERN int	p_scf;		// 'scrollfocus'
 #endif
 EXTERN long	p_so;		// 'scrolloff'
+EXTERN long	p_sop;		// 'scrolloffpad'
 EXTERN char_u	*p_sbo;		// 'scrollopt'
 EXTERN char_u	*p_sections;	// 'sections'
 EXTERN int	p_secure;	// 'secure'
@@ -1047,6 +1052,7 @@ EXTERN unsigned tc_flags;       // flags from 'tagcase'
 EXTERN long	p_tl;		// 'taglength'
 EXTERN int	p_tr;		// 'tagrelative'
 EXTERN char_u	*p_tags;	// 'tags'
+EXTERN int	p_tagsecure;    // 'tagsecure'
 EXTERN int	p_tgst;		// 'tagstack'
 #if defined(DYNAMIC_TCL)
 EXTERN char_u	*p_tcldll;	// 'tcldll'
@@ -1177,9 +1183,6 @@ EXTERN long	p_wmw;		// 'winminwidth'
 EXTERN long	p_wiw;		// 'winwidth'
 #ifdef FEAT_WAYLAND
 EXTERN char_u	*p_wse;		// 'wlseat'
-# ifdef FEAT_WAYLAND_CLIPBOARD_FS
-EXTERN int	p_wst;		// 'wlsteal'
-# endif
 EXTERN long     p_wtm;		// 'wltimeoutlen'
 #endif
 #if defined(MSWIN) && defined(FEAT_TERMINAL)
@@ -1405,6 +1408,7 @@ enum
     , WV_SMS
     , WV_SISO
     , WV_SO
+    , WV_SOP
 #ifdef FEAT_SPELL
     , WV_SPELL
 #endif

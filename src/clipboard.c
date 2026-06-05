@@ -42,39 +42,6 @@ static int clip_provider_is_available(char_u *provider);
 
 #  include "wayland.h"
 
-#  ifdef FEAT_WAYLAND_CLIPBOARD_FS
-
-// Structures used for focus stealing
-typedef struct {
-    struct wl_shm_pool	*pool;
-    int			fd;
-
-    struct wl_buffer	*buffer;
-    bool		available;
-
-    int			width;
-    int			height;
-    int			stride;
-    int			size;
-} clip_wl_buffer_store_T;
-
-typedef struct {
-    void		    *user_data;
-    void		    (*on_focus)(void *data, uint32_t serial);
-
-    struct wl_surface	    *surface;
-    struct wl_keyboard	    *keyboard;
-
-    struct {
-	struct xdg_surface  *surface;
-	struct xdg_toplevel *toplevel;
-    } shell;
-
-    bool got_focus;
-} clip_wl_fs_surface_T; // fs = focus steal
-
-#  endif // FEAT_WAYLAND_CLIPBOARD_FS
-
 // Represents either the regular or primary selection
 typedef struct {
     char_u		*contents;	// Non-null if we own selection,
@@ -84,10 +51,6 @@ typedef struct {
 					// else NULL if we don't.
     vwl_data_offer_T	*offer;		// Current offer for the selection
 
-#  ifdef FEAT_WAYLAND_CLIPBOARD_FS
-    bool		requires_focus;	// If focus needs to be given to us to
-					// work
-#  endif
     bool		own_success;	// Used by clip_wl_own_selection()
     bool		available;	// If selection is ready to serve/use
 
@@ -100,10 +63,6 @@ typedef struct {
 // seat (using the 'wl_seat' option)
 typedef struct {
     vwl_seat_T *seat;
-
-#  ifdef FEAT_WAYLAND_CLIPBOARD_FS
-    clip_wl_buffer_store_T *fs_buffer;
-#  endif
 
     clip_wl_selection_T regular;
     clip_wl_selection_T primary;
@@ -1936,7 +1895,8 @@ clip_x11_set_selection(Clipboard_T *cbd UNUSED)
 
 # endif
 
-# if defined(FEAT_XCLIPBOARD) || defined(FEAT_GUI_X11) || defined(FEAT_GUI_GTK)
+# if (defined(FEAT_XCLIPBOARD) || defined(FEAT_GUI_X11) || defined(FEAT_GUI_GTK)) \
+	&& !defined(USE_GTK4)
 /*
  * Get the contents of the X CUT_BUFFER0 and put it in "cbd".
  */
@@ -2365,290 +2325,6 @@ clip_wl_get_selection_type(clip_wl_selection_T *sel)
 	return WAYLAND_SELECTION_NONE;
 }
 
-#  ifdef FEAT_WAYLAND_CLIPBOARD_FS
-/*
- * If globals required for focus stealing method are available.
- */
-    static bool
-clip_wl_focus_stealing_available(void)
-{
-    return wayland_ct->gobjects.wl_compositor != NULL &&
-	wayland_ct->gobjects.wl_shm != NULL &&
-	wayland_ct->gobjects.xdg_wm_base != NULL;
-}
-
-/*
- * Called when compositor isn't using the buffer anymore, we can reuse it
- * again.
- */
-    static void
-wl_buffer_listener_release(
-	void		    *data,
-	struct wl_buffer    *buffer UNUSED)
-{
-    clip_wl_buffer_store_T *store = data;
-
-    store->available = true;
-}
-
-static struct wl_buffer_listener    wl_buffer_listener = {
-    .release	    = wl_buffer_listener_release
-};
-
-/*
- * Destroy a buffer store structure.
- */
-    static void
-clip_wl_destroy_buffer_store(clip_wl_buffer_store_T *store)
-{
-    if (store == NULL)
-	return;
-    if (store->buffer != NULL)
-	wl_buffer_destroy(store->buffer);
-    if (store->pool != NULL)
-	wl_shm_pool_destroy(store->pool);
-
-    close(store->fd);
-
-    vim_free(store);
-}
-
-/*
- * Initialize a buffer and its backing memory pool.
- */
-    static clip_wl_buffer_store_T *
-clip_wl_init_buffer_store(int width, int height)
-{
-    int			    fd, r;
-    clip_wl_buffer_store_T  *store;
-
-    store = alloc(sizeof(*store));
-
-    if (store == NULL)
-	return NULL;
-
-    store->available = false;
-
-    store->width = width;
-    store->height = height;
-    store->stride = store->width * 4;
-    store->size = store->stride * store->height;
-
-    fd = mch_create_anon_file();
-    r = ftruncate(fd, store->size);
-
-    if (r == -1)
-    {
-	if (fd >= 0)
-	    close(fd);
-	return NULL;
-    }
-
-    store->pool = wl_shm_create_pool(
-	    wayland_ct->gobjects.wl_shm,
-	    fd,
-	    store->size);
-    store->buffer = wl_shm_pool_create_buffer(
-	    store->pool,
-	    0,
-	    store->width,
-	    store->height,
-	    store->stride,
-	    WL_SHM_FORMAT_ARGB8888);
-
-    store->fd = fd;
-
-    wl_buffer_add_listener(store->buffer, &wl_buffer_listener, store);
-
-    if (vwl_connection_roundtrip(wayland_ct) == FAIL)
-    {
-	clip_wl_destroy_buffer_store(store);
-	return NULL;
-    }
-
-    store->available = true;
-
-    return store;
-}
-
-/*
- * Configure xdg_surface
- */
-    static void
-xdg_surface_listener_configure(
-	void		    *data UNUSED,
-	struct xdg_surface  *surface,
-	uint32_t	    serial)
-{
-    xdg_surface_ack_configure(surface, serial);
-}
-
-
-static struct xdg_surface_listener  xdg_surface_listener = {
-    .configure = xdg_surface_listener_configure
-};
-
-/*
- * Destroy a focus stealing structure.
- */
-    static void
-clip_wl_destroy_fs_surface(clip_wl_fs_surface_T *store)
-{
-    if (store == NULL)
-	return;
-    if (store->shell.toplevel != NULL)
-	xdg_toplevel_destroy(store->shell.toplevel);
-    if (store->shell.surface != NULL)
-	xdg_surface_destroy(store->shell.surface);
-    if (store->surface != NULL)
-	wl_surface_destroy(store->surface);
-    if (store->keyboard != NULL)
-    {
-	if (wl_keyboard_get_version(store->keyboard) >= 3)
-	    wl_keyboard_release(store->keyboard);
-	else
-	    wl_keyboard_destroy(store->keyboard);
-    }
-    vim_free(store);
-}
-
-VWL_FUNCS_DUMMY_KEYBOARD_EVENTS()
-
-/*
- * Called when the keyboard focus is on our surface
- */
-    static void
-clip_wl_fs_keyboard_listener_enter(
-    void		*data,
-    struct wl_keyboard	*keyboard UNUSED,
-    uint32_t		serial,
-    struct wl_surface	*surface UNUSED,
-    struct wl_array	*keys UNUSED)
-{
-    clip_wl_fs_surface_T *store = data;
-
-    store->got_focus = true;
-
-    if (store->on_focus != NULL)
-	store->on_focus(store->user_data, serial);
-}
-
-
-static struct wl_keyboard_listener  vwl_fs_keyboard_listener = {
-    .enter	    = clip_wl_fs_keyboard_listener_enter,
-    .key	    = clip_wl_fs_keyboard_listener_key,
-    .keymap	    = clip_wl_fs_keyboard_listener_keymap,
-    .leave	    = clip_wl_fs_keyboard_listener_leave,
-    .modifiers	    = clip_wl_fs_keyboard_listener_modifiers,
-    .repeat_info    = clip_wl_fs_keyboard_listener_repeat_info
-};
-
-/*
- * Create an invisible surface in order to gain focus and call on_focus() with
- * serial that was given.
- */
-    static int
-clip_wl_init_fs_surface(
-	vwl_seat_T		*seat,
-	clip_wl_buffer_store_T	*buffer_store,
-	void			(*on_focus)(void *, uint32_t),
-	void			*user_data)
-{
-    clip_wl_fs_surface_T    *store;
-#   ifdef ELAPSED_FUNC
-    elapsed_T		    start_tv;
-#   endif
-
-    if (wayland_ct->gobjects.wl_compositor == NULL
-	    || wayland_ct->gobjects.xdg_wm_base == NULL
-	    || buffer_store == NULL
-	    || seat == NULL)
-	return FAIL;
-
-    store = ALLOC_CLEAR_ONE(clip_wl_fs_surface_T);
-
-    if (store == NULL)
-	return FAIL;
-
-    // Get keyboard
-    store->keyboard = vwl_seat_get_keyboard(seat);
-
-    if (store->keyboard == NULL)
-	goto fail;
-
-    wl_keyboard_add_listener(store->keyboard, &vwl_fs_keyboard_listener, store);
-
-    if (vwl_connection_dispatch(wayland_ct) < 0)
-	goto fail;
-
-    store->surface = wl_compositor_create_surface(
-	    wayland_ct->gobjects.wl_compositor);
-    store->shell.surface = xdg_wm_base_get_xdg_surface(
-	    wayland_ct->gobjects.xdg_wm_base, store->surface);
-    store->shell.toplevel = xdg_surface_get_toplevel(store->shell.surface);
-
-    xdg_toplevel_set_title(store->shell.toplevel, "Vim clipboard");
-
-    xdg_surface_add_listener(store->shell.surface,
-	    &xdg_surface_listener, NULL);
-
-    wl_surface_commit(store->surface);
-
-    store->on_focus = on_focus;
-    store->user_data = user_data;
-    store->got_focus = FALSE;
-
-    if (vwl_connection_roundtrip(wayland_ct) == FAIL)
-	goto fail;
-
-    // We may get the enter event early, if we do then we will set `got_focus`
-    // to TRUE.
-    if (store->got_focus)
-	goto early_exit;
-
-    // Buffer hasn't been released yet, abort. This shouldn't happen but still
-    // check for it.
-    if (!buffer_store->available)
-	goto fail;
-
-    buffer_store->available = false;
-
-    wl_surface_attach(store->surface, buffer_store->buffer, 0, 0);
-    wl_surface_damage(store->surface, 0, 0,
-	    buffer_store->width, buffer_store->height);
-    wl_surface_commit(store->surface);
-
-    // Dispatch events until we receive the enter event. Add a max delay of
-    // 'p_wtm' when waiting for it (may be longer depending on how long we poll
-    // when dispatching events)
-#   ifdef ELAPSED_FUNC
-    ELAPSED_INIT(start_tv);
-#   endif
-
-    while (vwl_connection_dispatch(wayland_ct) >= 0)
-    {
-	if (store->got_focus)
-	    break;
-
-#   ifdef ELAPSED_FUNC
-	if (ELAPSED_FUNC(start_tv) >= p_wtm)
-	    goto fail;
-#   endif
-    }
-early_exit:
-    clip_wl_destroy_fs_surface(store);
-    vwl_connection_flush(wayland_ct);
-
-    return OK;
-fail:
-    clip_wl_destroy_fs_surface(store);
-    vwl_connection_flush(wayland_ct);
-
-    return FAIL;
-}
-
-#  endif // FEAT_WAYLAND_CLIPBOARD_FS
-
     static bool
 wl_data_offer_listener_event_offer(
     void *data UNUSED,
@@ -2815,23 +2491,6 @@ clip_init_wayland(void)
 	clip_wl.primary.device = clip_wl.regular.device;
     }
 
-#  ifdef FEAT_WAYLAND_CLIPBOARD_FS
-    if (clip_wl.regular.available
-	    && clip_wl.regular.manager->protocol == VWL_DATA_PROTOCOL_CORE
-	    && clip_wl_focus_stealing_available())
-	clip_wl.regular.requires_focus = true;
-    if (clip_wl.primary.available
-	    && clip_wl.primary.manager->protocol == VWL_DATA_PROTOCOL_PRIMARY
-	    && clip_wl_focus_stealing_available())
-	clip_wl.primary.requires_focus = true;
-
-    if (clip_wl.regular.requires_focus || clip_wl.primary.requires_focus)
-    {
-	// Initialize buffer to use for focus stealing
-	clip_wl.fs_buffer = clip_wl_init_buffer_store(1, 1);
-    }
-#  endif
-
     if (!clip_wl.regular.available && !clip_wl.primary.available)
 	return FAIL;
 
@@ -2860,10 +2519,6 @@ clip_uninit_wayland(void)
 	if (clip_plus.owned)
 	    clip_lose_selection(&clip_plus);
     }
-
-#  ifdef FEAT_WAYLAND_CLIPBOARD_FS
-    clip_wl_destroy_buffer_store(clip_wl.fs_buffer);
-#  endif
 
     // Don't want to double free
     if (clip_wl.regular.manager != clip_wl.primary.manager)
@@ -3036,23 +2691,10 @@ clip_wl_request_selection(Clipboard_T *cbd)
     if (!sel->available)
 	goto clear;
 
-#  ifdef FEAT_WAYLAND_CLIPBOARD_FS
-    if (sel->requires_focus)
-    {
-	// We don't care about the on_focus callback since once we gain
-	// focus the data offer events will come immediately.
-	if (clip_wl_init_fs_surface(clip_wl.seat,
-		    clip_wl.fs_buffer, NULL, NULL) == FAIL)
-	    goto clear;
-    }
-    else
-#  endif
-    {
-	// Dispatch any events that still queued up before checking for a data
-	// offer.
-	if (vwl_connection_roundtrip(wayland_ct) == FAIL)
-	    goto clear;
-    }
+    // Dispatch any events that still queued up before checking for a data
+    // offer.
+    if (vwl_connection_roundtrip(wayland_ct) == FAIL)
+	goto clear;
 
     if (sel->offer == NULL)
 	goto clear;
@@ -3253,16 +2895,7 @@ clip_wl_own_selection(Clipboard_T *cbd)
 	vwl_data_source_offer(sel->source, supported_mimes[i]);
 
     sel->own_success = false;
-#  ifdef FEAT_WAYLAND_CLIPBOARD_FS
-    if (sel->requires_focus)
-    {
-	if (clip_wl_init_fs_surface(clip_wl.seat, clip_wl.fs_buffer,
-		    clip_wl_do_set_selection, sel) == FAIL)
-	    goto fail;
-    }
-    else
-#  endif
-	clip_wl_do_set_selection(sel, 0);
+    clip_wl_do_set_selection(sel, 0);
 
     if (!sel->own_success)
 	goto fail;
@@ -3670,7 +3303,7 @@ did_set_clipboard(optset_T *args UNUSED)
 	vim_regfree(clip_exclude_prog);
 	clip_exclude_prog = new_exclude_prog;
 # endif
-# ifdef FEAT_GUI_GTK
+# if defined(FEAT_GUI_GTK) && !defined(USE_GTK4)
 	if (gui.in_use)
 	{
 	    gui_gtk_set_selection_targets((GdkAtom)GDK_SELECTION_PRIMARY);
@@ -3800,12 +3433,16 @@ clip_provider_get_callback(
     static void
 clip_provider_copy(char_u *reg, char_u *provider)
 {
+    static bool	recursive = false;
     callback_T	callback;
     typval_T	rettv;
     typval_T	argvars[4];
     yankreg_T	*y_ptr;
     char_u	type[2 + NUMBUFLEN] = {0};
     list_T	*list = NULL;
+
+    if (recursive)
+	return;
 
     if (clip_provider_get_callback(
 		reg,
@@ -3869,7 +3506,9 @@ clip_provider_copy(char_u *reg, char_u *provider)
     argvars[3].v_type = VAR_UNKNOWN;
 
     textlock++;
+    recursive = true;
     call_callback(&callback, -1, &rettv, 3, argvars);
+    recursive = false;
     clear_tv(&rettv);
     textlock--;
 
@@ -3880,12 +3519,16 @@ clip_provider_copy(char_u *reg, char_u *provider)
     static void
 clip_provider_paste(char_u *reg, char_u *provider)
 {
+    static bool	recursive = false;
     callback_T	callback;
     typval_T	argvars[2];
     typval_T	rettv;
     int		ret;
     char_u	*reg_type;
     list_T	*lines;
+
+    if (recursive)
+	return;
 
     if (clip_provider_get_callback(
 		reg,
@@ -3900,7 +3543,9 @@ clip_provider_paste(char_u *reg, char_u *provider)
     argvars[1].v_type = VAR_UNKNOWN;
 
     textlock++;
+    recursive = true;
     ret = call_callback(&callback, -1, &rettv, 1, argvars);
+    recursive = false;
     textlock--;
 
     if (ret == FAIL)
@@ -3971,7 +3616,7 @@ clip_provider_paste(char_u *reg, char_u *provider)
 	}
 	*curval++ = NULL;
 
-	if (*reg_type != NUL && (STRLEN(reg_type) <= 0
+	if (*reg_type != NUL && (STRLEN(reg_type) == 0
 		|| get_yank_type(&reg_type, &yank_type, &block_len) == FAIL))
 	{
 	    emsg(e_invalid_argument);

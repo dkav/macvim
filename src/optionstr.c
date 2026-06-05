@@ -30,7 +30,7 @@ static char *(p_briopt_values[]) = {"shift:", "min:", "sbr", "list:", "column:",
 #endif
 #if defined(FEAT_TABPANEL)
 // Note: Keep this in sync with tabpanelopt_changed()
-static char *(p_tplo_values[]) = {"align:", "columns:", "vert", NULL};
+static char *(p_tplo_values[]) = {"align:", "columns:", "scrollbar", "vert", NULL};
 static char *(p_tplo_align_values[]) = {"left", "right", NULL};
 #endif
 #if defined(FEAT_DIFF)
@@ -73,11 +73,11 @@ static char *(p_kpc_protocol_values[]) = {"none", "mok2", "kitty", NULL};
 #ifdef FEAT_PROP_POPUP
 // Note: Keep this in sync with parse_popup_option()
 static char *(p_popup_cpp_option_values[]) = {"align:", "border:",
-    "borderhighlight:", "close:", "height:", "highlight:", "resize:",
-    "shadow:", "width:", NULL};
+    "borderhighlight:", "close:", "height:", "highlight:", "opacity:",
+    "resize:", "shadow:", "width:", NULL};
 static char *(p_popup_pvp_option_values[]) = {"border:",
-    "borderhighlight:", "close:", "height:", "highlight:", "resize:",
-    "shadow:", "width:", NULL};
+    "borderhighlight:", "close:", "height:", "highlight:", "opacity:",
+    "resize:", "shadow:", "width:", NULL};
 static char *(p_popup_option_on_off_values[]) = {"on", "off", NULL};
 static char *(p_popup_cpp_border_values[]) = {"single", "double", "round",
     "ascii", "on", "off", "custom:", NULL};
@@ -116,7 +116,7 @@ static char *(p_ttym_values[]) = {"xterm", "xterm2", "dec", "netterm", "jsbterm"
 #endif
 static char *(p_ve_values[]) = {"block", "insert", "all", "onemore", "none", "NONE", NULL};
 // Note: Keep this in sync with check_opt_wim()
-static char *(p_wim_values[]) = {"full", "longest", "list", "lastused", "noselect", NULL};
+static char *(p_wim_values[]) = {"full", "longest", "list", "lastused", "noselect", "noinsert", NULL};
 static char *(p_wop_values[]) = {"fuzzy", "tagfile", "pum", "exacttext", NULL};
 #ifdef FEAT_WAK
 static char *(p_wak_values[]) = {"yes", "menu", "no", NULL};
@@ -671,8 +671,30 @@ check_stl_option(char_u *s)
 	if (!*s)
 	    break;
 	s++;
+	if (*s == STL_CLICKFUNC)
+	{
+	    if (s[1] == ']')
+	    {
+		// %[] - end click region
+		s += 2;
+		continue;
+	    }
+	    if (ASCII_ISALPHA(s[1]) || s[1] == '_')
+	    {
+		// %[FuncName] - start click region
+		char_u *rb = vim_strchr(s + 2, ']');
+		if (rb != NULL)
+		{
+		    s = rb + 1;
+		    continue;
+		}
+	    }
+	    // Bare %[ is invalid
+	    return illegal_char(errbuf, errbuflen, *s);
+	}
 	if (*s == STL_LINEBREAK)
 	{
+	    // Plain %@ - line break
 	    s++;
 	    continue;
 	}
@@ -694,6 +716,32 @@ check_stl_option(char_u *s)
 	    s++;
 	if (*s == STL_USER_HL)
 	    continue;
+	if (*s == STL_CLICKFUNC)
+	{
+	    // %N[FuncName] or %N[]
+	    if (s[1] == ']')
+	    {
+		s += 2;
+		continue;
+	    }
+	    if (ASCII_ISALPHA(s[1]) || s[1] == '_')
+	    {
+		char_u *rb = vim_strchr(s + 2, ']');
+		if (rb != NULL)
+		{
+		    s = rb + 1;
+		    continue;
+		}
+	    }
+	    // Bare %N[ is invalid
+	    return illegal_char(errbuf, errbuflen, *s);
+	}
+	if (*s == STL_LINEBREAK)
+	{
+	    // %N@ - line break
+	    s++;
+	    continue;
+	}
 	if (*s == '.')
 	{
 	    s++;
@@ -1374,7 +1422,7 @@ did_set_buftype(optset_T *args UNUSED)
 
     if (curwin->w_status_height)
     {
-	curwin->w_redr_status = TRUE;
+	curwin->w_redr_status = true;
 	redraw_later(UPD_VALID);
     }
     curbuf->b_help = (curbuf->b_p_bt[0] == 'h');
@@ -4142,6 +4190,43 @@ expand_set_sessionoptions(
 #endif
 
 /*
+ * Validate 'shellpipe'/'shellredir' option.
+ */
+    char *
+did_set_shellpipe_redir(optset_T *args)
+{
+    char_u	*p;
+    bool	seen = false;
+
+    for (p = args->os_newval.string; *p != NUL; ++p)
+    {
+	if (*p != '%')
+	    continue;
+
+	if (p[1] == NUL)
+	    return e_invalid_format_string_single_percent_s;
+
+	if (p[1] == '%')
+	{
+	    ++p;    // skip second %
+	    continue;
+	}
+
+	if (p[1] == 's')
+	{
+	    if (seen)
+		return e_invalid_format_string_single_percent_s;
+
+	    seen = true;
+	    ++p;    // consume 's'
+	    continue;
+	}
+	return e_invalid_format_string_single_percent_s;
+    }
+    return NULL;
+}
+
+/*
  * The 'shortmess' option is changed.
  */
     char *
@@ -4346,6 +4431,10 @@ expand_set_spellsuggest(optexpand_T *args, int *numMatches, char_u ***matches)
     char *
 did_set_splitkeep(optset_T *args UNUSED)
 {
+    win_T	*wp;
+    tabpage_T	*tp;
+    FOR_ALL_TAB_WINDOWS(tp, wp)
+	wp->w_prev_height = wp->w_height;
     return did_set_opt_strings(p_spk, p_spk_values, FALSE);
 }
 
@@ -5385,7 +5474,7 @@ do_filetype_autocmd(char_u **varp, int opt_flags, int value_changed)
     secure = 0;
 
     ++ft_recursive;
-    curbuf->b_did_filetype = TRUE;
+    curbuf->b_did_filetype = true;
     // Only pass TRUE for "force" when the value changed or not
     // used recursively, to avoid endless recurrence.
     apply_autocmds(EVENT_FILETYPE, curbuf->b_p_ft, curbuf->b_fname,
@@ -5573,7 +5662,7 @@ did_set_string_option(
     if (curwin->w_curswant != MAXCOL
 		   && (get_option_flags(opt_idx) & (P_CURSWANT | P_RALL)) != 0
 				&& (get_option_flags(opt_idx) & P_HLONLY) == 0)
-	curwin->w_set_curswant = TRUE;
+	curwin->w_set_curswant = true;
 
     if ((opt_flags & OPT_NO_REDRAW) == 0)
     {

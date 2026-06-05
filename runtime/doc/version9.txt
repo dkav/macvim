@@ -1,4 +1,4 @@
-*version9.txt*	For Vim version 9.2.  Last change: 2026 Apr 07
+*version9.txt*	For Vim version 9.2.  Last change: 2026 May 31
 
 
 		  VIM REFERENCE MANUAL	  by Bram Moolenaar
@@ -41880,6 +41880,9 @@ Highlighting: ~
 |hl-PmenuMatchSel|	Popup menu: highlighting of matched text in selected
 			line
 |hl-PmenuShadow|	Popup menu: highlighting of the popup shadow
+|hl-Popup|		Popup window: body, default link |hl-Pmenu|
+|hl-PopupBorder|	Popup window: border characters, default link |hl-Pmenu|
+|hl-PopupTitle|		Popup window: title, default link |hl-Pmenu|
 |hl-PreInsert|		highlighting for completion preinserted text
 |hl-TabPanel|		|tabpanel|: not active tab page label
 |hl-TabPanelFill|	|tabpanel|: filler space
@@ -41954,7 +41957,7 @@ Vim Arguments: ~
 
 Configure Switches: ~
 --with-wayland			Enable the |wayland| feature.
---enable-wayland-focus-steal	Enable the |wayland-focus-steal| feature.
+--enable-wayland-focus-steal	Enable the wayland-focus-steal feature.
 --enable-socketserver		Enable the |socketserver-clientserver|
 				feature.
 
@@ -52582,11 +52585,19 @@ VERSION 9.3				*version-9.3* *version9.3* *vim-9.3*
 This section is about improvements made between version 9.2 and 9.3 and is
 work in progress.
 
+GUI ~
+-----
+- Added support for the GTK 4 GUI (via patch 9.2.0501).  Enable with
+  `--enable-gui=gtk4` configure switch at build time.
+- Add support for fullscreen mode in the GTK UI |'go-s'|.
+
 Popups ~
 ------
 - Support for transparency, see |popup-opacity|.
 - 'previewpopup' supports the same values as 'completepopup' (except for
   "align").
+- Support "opacity" setting for 'completepopup' option.
+- Support for clipping textproperty popups |popup-clipwindow|.
 
 Diff mode ~
 ---------
@@ -52611,12 +52622,35 @@ Other ~
 - New "leadtab" value for the 'listchars' setting.
 - Improved |:set+=|, |:set^=| and |:set-=| handling of comma-separated "key:value"
   pairs individually (e.g. 'listchars', 'fillchars', 'diffopt').
+- The |:TOhtml| command has been completely rewritten in Vim9 script, improving
+  performance and maintainability.
 - |system()| and |systemlist()| functions accept a list as first argument,
   bypassing the shell completely.
+- Allow mouse clickable regions in the 'statusline', 'tabline' and the
+  'tabpanel' using the |stl-%[FuncName]| atom.
+- Enable reflow support in the |:terminal|.
+- Enabled scrolling for the tabpanel when the tab page list exceeds the screen
+  height.  Also added the "scrollbar" sub-option to 'tabpanelopt'.
+- Added the "noinsert" value to the 'wildmode' option for symmetry with the
+  'completeopt' option
+- Channel can handle |Blob| messages |channel-open-options|.
+- Added the "u" flag to 'shortmess' to silence undo/redo messages: |shm-u|
+- |:command-completion-customlist| can return a list of dictionaries with
+  kind/menu/info/abbr for the popup menu.
+- |C-indenting| detects comments better.
+- The |package-hlyank| can now optionally highlight the last put region as
+  well.
+- New argument handling for user commands |:command-nargs| using the "-nars=_"
+  attribute to handle completion of single arguments with spaces as expected.
+- Support %0{} in 'statusline' to insert the expression result verbatim and
+  not drop leading spaces |stl-%0{|.
+- Generated Session and View files are written in Vim9 script, see |:mksession|,
+  |:mkview| and |:mkvimrc|
 
 Platform specific ~
 -----------------
 - support OpenType font features in 'guifont' for DirectWrite (Win32)
+- Include strptime() fallback for MS-Windows
 
 xxd ~
 ---
@@ -52631,6 +52665,15 @@ Changed ~
 - |js_decode()| rejects lone surrogates
 - virtual text properties on lines deleted by a multi-line substitute
   are moved to the resulting joined line instead of being dropped.
+- Only a few whitelisted options are allowed to be set by a modeline to
+  improve overall security, see for details: 'modelinestrict'
+- Removed the Wayland focus steal feature 'wlsteal', since it causes too many
+  issues and can now be re-implemted using the |clipboard-providers| feature
+  if needed, see |wayland-primary-selection| for an example.
+- On Unix, filename completion for single-file Ex commands now treats embedded
+  whitespace as part of the filename, like on other platforms.
+- Rewrite the clientserver socketserver backend to use channels and JSON.
+
 
 							*added-9.3*
 Added ~
@@ -52640,21 +52683,35 @@ Various syntax, indent and other plugins were added.
 Functions: ~
 
 |ch_listen()|		listen on {address}
+|tabpanel_getinfo()|	get current state of the |tabpanel|
+|tabpanel_scroll()|	scroll the |tabpanel|
 
 Autocommands: ~
 
 |SessionLoadPre|	before loading a |Session| file
+|TextPutPost|		after putting text
+|TextPutPre|		before putting text
 
 Options: ~
 
-'pumopt'		Additional options for the popup menu
+'modelinestrict'	Only allow safe options to be set from a modeline.
+'pumopt'		Additional options for the popup menu.
+'scrolloffpad'		Vertically center cursor at end of file.
 'statuslineopt'		Extra window-local options for the 'statusline', to
 			configure the height.
 't_BS'			Begin synchronized update.
 't_ES'			End synchronized update.
+'tagsecure'		Do not open remote files using tag commands
 'termresize'		Method for handling terminal resize events.
 'termsync'		Enable support for terminal DEC 2026 sync mode.
 'winhighlight'		Window-local highlight group mappings.
+
+Highlighting: ~
+
+|hl-VertSplitNC|	Column separator of non-current window.
+|hl-Popup|		Popup window body.
+|hl-PopupBorder|	Popup window border.
+|hl-PopupTitle|		Popup window title.
 
 ==============================================================================
 PATCHES						*patches-9.3* *bug-fixes-9.3*

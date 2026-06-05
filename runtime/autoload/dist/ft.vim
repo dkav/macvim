@@ -3,7 +3,7 @@ vim9script
 # Vim functions for file type detection
 #
 # Maintainer:		The Vim Project <https://github.com/vim/vim>
-# Last Change:		2026 Apr 03
+# Last Change:		2026 May 29
 # Former Maintainer:	Bram Moolenaar <Bram@vim.org>
 
 # These functions are moved here from runtime/filetype.vim to make startup
@@ -61,6 +61,21 @@ export def FTapp()
     endif
     return
   endfor
+enddef
+
+# This function checks for Kawasaki robots AS file or atlas file type.
+export def FTas()
+  if exists("g:filetype_as")
+    exe "setf " .. g:filetype_as
+    return
+  endif
+  for lnum in range(1, min([line("$"), 30]))
+    if getline(lnum) =~ '^\.NETCONF'
+      setf kawasaki_as
+      return
+    endif
+  endfor
+  setf atlas
 enddef
 
 # This function checks for the kind of assembly that is wanted by the user, or
@@ -547,7 +562,7 @@ export def FThtml()
 
   while n < 40 && n <= line("$")
     # Check for Angular
-    if getline(n) =~ '@\(if\|for\|defer\|switch\)\|\*\(ngIf\|ngFor\|ngSwitch\|ngTemplateOutlet\)\|ng-template\|ng-content'
+    if getline(n) =~ '@\(if\|for\|defer\|switch\)\|\*\(ngIf\|ngFor\|ngSwitch\|ngTemplateOutlet\)\|\<ng-template\|\<ng-content'
       setf htmlangular
       return
     endif
@@ -798,9 +813,14 @@ export def FTnroff(): number
 enddef
 
 export def FTmm()
+  if exists("g:filetype_mm")
+    exe "setf " .. g:filetype_mm
+    return
+  endif
+
   var n = 1
   while n < 20
-    if getline(n) =~ '^\s*\(#\s*\(include\|import\)\>\|@import\>\|/\*\)'
+    if getline(n) =~ '^\s*\(//\|#\s*\(include\|import\)\>\|@import\>\|/\*\)'
       setf objcpp
       return
     endif
@@ -915,7 +935,7 @@ export def FTinc()
       elseif line =~ '^\s*\%({\|(\*\)' || line =~? ft_pascal_keywords
         setf pascal
         return
-      elseif line =~# '\<\%(require\|inherit\)\>' || line =~# '[A-Z][A-Za-z0-9_:${}/]*\s\+\%(??\|[?:+.]\)\?=.\? '
+      elseif line =~# '^\s*\<\%(require\|inherit\)\>' || line =~# '^\s*[A-Z][A-Za-z0-9_:${}/]*\%(\[[A-Za-z0-9_:/]\+\]\)*\s\+\%(??=\|[?:+.]=\|=[+.]\?\)\s\+'
         setf bitbake
         return
       endif
@@ -1726,6 +1746,8 @@ const ft_from_ext = {
   "tdf": "ahdl",
   # AIDL
   "aidl": "aidl",
+  # Algol 68
+  "a68": "algol68",
   # AMPL
   "run": "ampl",
   # ANTLR / PCCTS
@@ -1764,7 +1786,6 @@ const ft_from_ext = {
   "astro": "astro",
   # Atlas
   "atl": "atlas",
-  "as": "atlas",
   # Atom is based on XML
   "atom": "xml",
   # Authzed
@@ -1798,6 +1819,7 @@ const ft_from_ext = {
   # BDF font
   "bdf": "bdf",
   # Beancount
+  "bean": "beancount",
   "beancount": "beancount",
   # BibTeX bibliography database file
   "bib": "bib",
@@ -2292,6 +2314,8 @@ const ft_from_ext = {
   # KAREL
   "kl": "karel",
   "KL": "karel",
+  # Kawasaki AS
+  "pg": "kawasaki_as",
   # KDL
   "kdl": "kdl",
   # KerML
@@ -2312,6 +2336,8 @@ const ft_from_ext = {
   "kts": "kotlin",
   # KDE script
   "ks": "kscript",
+  # Kaitai struct
+  "ksy": "yaml",
   # Kyaml
   "kyaml": "yaml",
   "kyml": "yaml",
@@ -2613,6 +2639,8 @@ const ft_from_ext = {
   "qmd": "quarto",
   # QuickBms
   "bms": "quickbms",
+  # Popcap Reanimation files
+  "reanim": "xml",
   # Racket (formerly detected as "scheme")
   "rkt": "racket",
   "rktd": "racket",
@@ -2707,6 +2735,8 @@ const ft_from_ext = {
   "mill": "scala",
   # SBT - Scala Build Tool
   "sbt": "sbt",
+  # SGF, Smart Game Format
+  "sgf": "sgf",
   # Slang Shading Language
   "slang": "shaderslang",
   # Slint
@@ -2735,6 +2765,8 @@ const ft_from_ext = {
   "sieve": "sieve",
   # TriG
   "trig": "trig",
+  # Tolk
+  "tolk": "tolk",
   # Zig and Zig Object Notation (ZON)
   "zig": "zig",
   "zon": "zig",
@@ -3113,7 +3145,9 @@ const ft_from_ext = {
   "bp": "bp",
   # Tiltfile
   "Tiltfile": "tiltfile",
-  "tiltfile": "tiltfile"
+  "tiltfile": "tiltfile",
+  # Ghostty
+  "ghostty": "ghostty",
 }
 # Key: file name (the final path component, excluding the drive and root)
 # Value: filetype

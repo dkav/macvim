@@ -742,6 +742,9 @@ call_dfunc(
     else
 	ectx->ec_outer_ref = NULL;
 
+    if (ufunc->uf_flags & FC_SANDBOX)
+	++sandbox;
+
     ++ufunc->uf_calls;
 
     // Set execution state to the start of the called function.
@@ -1289,6 +1292,9 @@ func_return(ectx_T *ectx)
 
     if (dfunc->df_defer_var_idx > 0)
 	invoke_defer_funcs(ectx);
+
+    if (dfunc->df_ufunc->uf_flags & FC_SANDBOX)
+	--sandbox;
 
     // No check for uf_refcount being zero, cannot think of a way that would
     // happen.
@@ -2151,10 +2157,8 @@ fill_partial_and_closure(
 	// and local variables) so that the closure can use it later.
 	// Store a reference to the partial so we can handle that.
 	if (GA_GROW_FAILS(&ectx->ec_funcrefs, 1))
-	{
-	    vim_free(pt);
+	    // caller needs to free pt
 	    return FAIL;
-	}
 	// Extra variable keeps the count of closures created in the current
 	// function call.
 	++(((typval_T *)ectx->ec_stack.ga_data) + ectx->ec_frame_idx
@@ -4472,7 +4476,7 @@ exec_instructions(ectx_T *ectx)
 
 	    // store $ENV
 	    case ISN_STOREENV:
-		if (check_restricted())
+		if (check_secure() || check_restricted())
 		    goto theend;
 		--ectx->ec_stack.ga_len;
 		tv = STACK_TV_BOT(0);
@@ -5117,7 +5121,10 @@ exec_instructions(ectx_T *ectx)
 		    if (fill_partial_and_closure(pt, ufunc,
 			       extra == NULL ? NULL : &extra->fre_loopvar_info,
 								 ectx) == FAIL)
+		    {
+			vim_free(pt);
 			goto theend;
+		    }
 		    tv = STACK_TV_BOT(0);
 		    ++ectx->ec_stack.ga_len;
 		    tv->vval.v_partial = pt;

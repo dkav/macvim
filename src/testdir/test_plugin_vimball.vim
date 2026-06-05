@@ -83,3 +83,30 @@ func Test_vimball_path_traversal()
   call assert_false(filereadable('../XVimball/Xtest.txt'))
   call s:teardown()
 endfunc
+
+func Test_vimball_path_traversal_drive_letter()
+  call s:Mkvimball()
+  call delete('XVimball', 'rf')
+  sp Xtest.vmb
+  " try to write to a Windows-style absolute path with a drive letter
+  4s#XVimball#C:/&#
+  so %
+  call feedkeys("\<cr>", "it")
+
+  let mess = execute(':mess')->split('\n')[-1]
+  call assert_match('(Vimball) Path Traversal Attack detected, aborting\.\.\.', mess)
+  call s:teardown()
+endfunc
+
+func Test_vimball_evil_filenames()
+  call s:Mkvimball()
+  call delete('XVimball', 'rf')
+  sp Xtest.vmb
+  4s#XVimball#pwn')#
+  so %
+  call feedkeys("\<cr>", "it")
+
+  let mess = execute(':mess')->split('\n')[-1]
+  call assert_match('(Vimball) Forbidding strange filename:.* aborting\.\.\.', mess)
+  call s:teardown()
+endfunc

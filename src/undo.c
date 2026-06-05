@@ -495,12 +495,12 @@ u_savecommon(
     size = bot - top - 1;
 
     /*
-     * If curbuf->b_u_synced == TRUE make a new header.
+     * If curbuf->b_u_synced is true make a new header.
      */
     if (curbuf->b_u_synced)
     {
 	// Need to create new entry in b_changelist.
-	curbuf->b_new_change = TRUE;
+	curbuf->b_new_change = true;
 
 	if (get_undolevel() >= 0)
 	{
@@ -559,7 +559,7 @@ u_savecommon(
 	{
 	    if (old_curhead != NULL)
 		u_freebranch(curbuf, old_curhead, NULL);
-	    curbuf->b_u_synced = FALSE;
+	    curbuf->b_u_synced = false;
 	    return OK;
 	}
 
@@ -653,7 +653,7 @@ u_savecommon(
 			// entry now.  Following deleted/inserted lines go to
 			// the re-used entry.
 			u_getbot();
-			curbuf->b_u_synced = FALSE;
+			curbuf->b_u_synced = false;
 
 			// Move the found entry to become the last entry.  The
 			// order of undo/redo doesn't matter for the entries
@@ -740,7 +740,7 @@ u_savecommon(
 	uep->ue_array = NULL;
     uep->ue_next = curbuf->b_u_newhead->uh_entry;
     curbuf->b_u_newhead->uh_entry = uep;
-    curbuf->b_u_synced = FALSE;
+    curbuf->b_u_synced = false;
     undo_undoes = FALSE;
 
 #ifdef U_DEBUG
@@ -2081,38 +2081,54 @@ u_read_undo(char_u *name, char_u *hash, char_u *orig_name UNUSED)
 		corruption_error("duplicate uh_seq", file_name);
 		goto error;
 	    }
-	for (j = 0; j < num_head; j++)
-	    if (uhp_table[j] != NULL
-				  && uhp_table[j]->uh_seq == uhp->uh_next.seq)
-	    {
-		uhp->uh_next.ptr = uhp_table[j];
-		SET_FLAG(j);
-		break;
-	    }
-	for (j = 0; j < num_head; j++)
-	    if (uhp_table[j] != NULL
-				  && uhp_table[j]->uh_seq == uhp->uh_prev.seq)
-	    {
-		uhp->uh_prev.ptr = uhp_table[j];
-		SET_FLAG(j);
-		break;
-	    }
-	for (j = 0; j < num_head; j++)
-	    if (uhp_table[j] != NULL
-			      && uhp_table[j]->uh_seq == uhp->uh_alt_next.seq)
-	    {
-		uhp->uh_alt_next.ptr = uhp_table[j];
-		SET_FLAG(j);
-		break;
-	    }
-	for (j = 0; j < num_head; j++)
-	    if (uhp_table[j] != NULL
-			      && uhp_table[j]->uh_seq == uhp->uh_alt_prev.seq)
-	    {
-		uhp->uh_alt_prev.ptr = uhp_table[j];
-		SET_FLAG(j);
-		break;
-	    }
+	{
+	    int seq = uhp->uh_next.seq;
+	    uhp->uh_next.ptr = NULL;
+	    for (j = 0; j < num_head; j++)
+		if (uhp_table[j] != NULL && i != j
+				    && uhp_table[j]->uh_seq == seq)
+		{
+		    uhp->uh_next.ptr = uhp_table[j];
+		    SET_FLAG(j);
+		    break;
+		}
+	}
+	{
+	    int seq = uhp->uh_prev.seq;
+	    uhp->uh_prev.ptr = NULL;
+	    for (j = 0; j < num_head; j++)
+		if (uhp_table[j] != NULL && i != j
+				    && uhp_table[j]->uh_seq == seq)
+		{
+		    uhp->uh_prev.ptr = uhp_table[j];
+		    SET_FLAG(j);
+		    break;
+		}
+	}
+	{
+	    int seq = uhp->uh_alt_next.seq;
+	    uhp->uh_alt_next.ptr = NULL;
+	    for (j = 0; j < num_head; j++)
+		if (uhp_table[j] != NULL && i != j
+				&& uhp_table[j]->uh_seq == seq)
+		{
+		    uhp->uh_alt_next.ptr = uhp_table[j];
+		    SET_FLAG(j);
+		    break;
+		}
+	}
+	{
+	    int seq = uhp->uh_alt_prev.seq;
+	    uhp->uh_alt_prev.ptr = NULL;
+	    for (j = 0; j < num_head; j++)
+		if (uhp_table[j] != NULL && i != j
+				&& uhp_table[j]->uh_seq == seq)
+		{
+		    uhp->uh_alt_prev.ptr = uhp_table[j];
+		    SET_FLAG(j);
+		    break;
+		}
+	}
 	if (old_header_seq > 0 && old_idx < 0 && uhp->uh_seq == old_header_seq)
 	{
 	    old_idx = i;
@@ -2146,7 +2162,7 @@ u_read_undo(char_u *name, char_u *hash, char_u *orig_name UNUSED)
     curbuf->b_u_save_nr_last = last_save_nr;
     curbuf->b_u_save_nr_cur = last_save_nr;
 
-    curbuf->b_u_synced = TRUE;
+    curbuf->b_u_synced = true;
     vim_free(uhp_table);
 
 # ifdef U_DEBUG
@@ -2199,7 +2215,7 @@ u_undo(int count)
      * original vi. If this happens twice in one macro the result will not
      * be compatible.
      */
-    if (curbuf->b_u_synced == FALSE)
+    if (!curbuf->b_u_synced)
     {
 	u_sync(TRUE);
 	count = 1;
@@ -2262,7 +2278,8 @@ u_doit(int startcount)
 		beep_flush();
 		if (count == startcount - 1)
 		{
-		    msg(_("Already at oldest change"));
+		    if (!shortmess(SHM_UNDO))
+			msg(_("Already at oldest change"));
 		    return;
 		}
 		break;
@@ -2277,7 +2294,8 @@ u_doit(int startcount)
 		beep_flush();	// nothing to redo
 		if (count == startcount - 1)
 		{
-		    msg(_("Already at newest change"));
+		    if (!shortmess(SHM_UNDO))
+			msg(_("Already at newest change"));
 		    return;
 		}
 		break;
@@ -2333,7 +2351,7 @@ undo_time(
     }
 
     // First make sure the current undoable change is synced.
-    if (curbuf->b_u_synced == FALSE)
+    if (!curbuf->b_u_synced)
 	u_sync(TRUE);
 
     u_newcount = 0;
@@ -2530,10 +2548,13 @@ undo_time(
 
 	if (closest == closest_start)
 	{
-	    if (step < 0)
-		msg(_("Already at oldest change"));
-	    else
-		msg(_("Already at newest change"));
+	    if (!shortmess(SHM_UNDO))
+	    {
+		if (step < 0)
+		    msg(_("Already at oldest change"));
+		else
+		    msg(_("Already at newest change"));
+	    }
 	    return;
 	}
 
@@ -2996,7 +3017,8 @@ u_undo_end(
 #endif
 
     if (global_busy	    // no messages now, wait until global is finished
-	    || !messaging())  // 'lazyredraw' set, don't do messages now
+	    || !messaging() // 'lazyredraw' set, don't do messages now
+	    || shortmess(SHM_UNDO))
 	return;
 
     if (curbuf->b_ml.ml_flags & ML_EMPTY)
@@ -3078,7 +3100,7 @@ u_sync(
 	return;		    // XIM is busy, don't break an undo sequence
 #endif
     if (get_undolevel() < 0)
-	curbuf->b_u_synced = TRUE;  // no entries, nothing to do
+	curbuf->b_u_synced = true;  // no entries, nothing to do
     else
     {
 	u_getbot();		    // compute ue_bot of previous u_save
@@ -3215,7 +3237,7 @@ ex_undojoin(exarg_T *eap UNUSED)
 	return;		    // no entries, nothing to do
     else
 	// Append next change to the last entry
-	curbuf->b_u_synced = FALSE;
+	curbuf->b_u_synced = false;
 }
 
 /*
@@ -3226,7 +3248,7 @@ ex_undojoin(exarg_T *eap UNUSED)
 u_unchanged(buf_T *buf)
 {
     u_unch_branch(buf->b_u_oldhead);
-    buf->b_did_warn = FALSE;
+    buf->b_did_warn = false;
 }
 
 /*
@@ -3319,7 +3341,7 @@ u_get_headentry(void)
 
 /*
  * u_getbot(): compute the line number of the previous u_save
- *		It is called only when b_u_synced is FALSE.
+ *		It is called only when b_u_synced is false.
  */
     static void
 u_getbot(void)
@@ -3353,7 +3375,7 @@ u_getbot(void)
 	curbuf->b_u_newhead->uh_getbot_entry = NULL;
     }
 
-    curbuf->b_u_synced = TRUE;
+    curbuf->b_u_synced = true;
 }
 
 /*
@@ -3480,7 +3502,7 @@ u_freeentry(u_entry_T *uep, long n)
 u_clearall(buf_T *buf)
 {
     buf->b_u_newhead = buf->b_u_oldhead = buf->b_u_curhead = NULL;
-    buf->b_u_synced = TRUE;
+    buf->b_u_synced = true;
     buf->b_u_numhead = 0;
     buf->b_u_line_ptr.ul_line = NULL;
     buf->b_u_line_ptr.ul_len = 0;

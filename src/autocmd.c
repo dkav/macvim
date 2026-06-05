@@ -196,6 +196,8 @@ static keyvalue_T event_tab[NUM_EVENTS] = {
     KEYVALUE_ENTRY(-EVENT_TEXTCHANGEDI, "TextChangedI"),
     KEYVALUE_ENTRY(-EVENT_TEXTCHANGEDP, "TextChangedP"),
     KEYVALUE_ENTRY(-EVENT_TEXTCHANGEDT, "TextChangedT"),
+    KEYVALUE_ENTRY(-EVENT_TEXTPUTPOST, "TextPutPost"),
+    KEYVALUE_ENTRY(-EVENT_TEXTPUTPRE, "TextPutPre"),
     KEYVALUE_ENTRY(-EVENT_TEXTYANKPOST, "TextYankPost"),
     KEYVALUE_ENTRY(EVENT_USER, "User"),
     KEYVALUE_ENTRY(EVENT_VIMENTER, "VimEnter"),
@@ -260,7 +262,7 @@ static int current_augroup = AUGROUP_DEFAULT;
 static int au_need_clean = FALSE;   // need to delete marked patterns
 
 static event_T event_name2nr(char_u *start, char_u **end);
-static char_u *event_nr2name(event_T event);
+static string_T *event_nr2name(event_T event);
 static int au_get_grouparg(char_u **argp);
 static int do_autocmd_event(event_T event, char_u *pat, int once, int nested, char_u *cmd, int forceit, int group, int flags);
 static int apply_autocmds_group(event_T event, char_u *fname, char_u *fname_io, int force, int group, buf_T *buf, exarg_T *eap);
@@ -304,6 +306,8 @@ show_autocmd(AutoPat *ap, event_T event)
 	goto theend;
     if (event != last_event || ap->group != last_group)
     {
+	string_T    *event_name;
+
 	if (ap->group != AUGROUP_DEFAULT)
 	{
 	    if (AUGROUP_NAME(ap->group) == NULL)
@@ -312,7 +316,8 @@ show_autocmd(AutoPat *ap, event_T event)
 		msg_puts_attr((char *)AUGROUP_NAME(ap->group), HL_ATTR(HLF_T));
 	    msg_puts("  ");
 	}
-	msg_puts_attr((char *)event_nr2name(event), HL_ATTR(HLF_T));
+	event_name = event_nr2name(event);
+	msg_puts_attr((char *)event_name->string, HL_ATTR(HLF_T));
 	last_event = event;
 	last_group = ap->group;
 	msg_putchar('\n');
@@ -484,9 +489,12 @@ aubuflocal_remove(buf_T *buf)
 		au_remove_pat(ap);
 		if (p_verbose >= 6)
 		{
+		    string_T	*event_name;
+
 		    verbose_enter();
+		    event_name = event_nr2name(event);
 		    smsg(_("auto-removing autocommand: %s <buffer=%d>"),
-					   event_nr2name(event), buf->b_fnum);
+				       event_name->string, buf->b_fnum);
 		    verbose_leave();
 		}
 	    }
@@ -709,13 +717,14 @@ event_name2nr(char_u *start, char_u **end)
 /*
  * Return the name for event "event".
  */
-    static char_u *
+    static string_T *
 event_nr2name(event_T event)
 {
     int	    i;
-#define CACHE_SIZE 12
+    enum {CACHE_SIZE = 12};
     static int cache_tab[CACHE_SIZE];
     static int cache_last_index = -1;
+    static string_T unknown = STR_LITERAL_INIT("Unknown");
 
     if (cache_last_index < 0)
     {
@@ -730,7 +739,7 @@ event_nr2name(event_T event)
     for (i = cache_last_index; cache_tab[i] >= 0; )
     {
 	if ((event_T)abs(event_tab[cache_tab[i]].key) == event)
-	    return event_tab[cache_tab[i]].value.string;
+	    return &event_tab[cache_tab[i]].value;
 
 	if (i == 0)
 	    i = CACHE_SIZE - 1;
@@ -754,12 +763,11 @@ event_nr2name(event_T event)
 	    else
 		++cache_last_index;
 	    cache_tab[cache_last_index] = i;
-	    break;
+	    return &event_tab[i].value;
 	}
     }
 
-    return (i == NUM_EVENTS) ? (char_u *)"Unknown" :
-						    event_tab[i].value.string;
+    return &unknown;
 }
 
 /*
@@ -2024,6 +2032,25 @@ has_cmdundefined(void)
 }
 
 #if defined(FEAT_EVAL)
+
+/*
+ * Return TRUE when there is a TextPutPost autocommand defined.
+ */
+    int
+has_textputpost(void)
+{
+    return (first_autopat[(int)EVENT_TEXTPUTPOST] != NULL);
+}
+
+/*
+ * Return TRUE when there is a TextPutPre autocommand defined.
+ */
+    int
+has_textputpre(void)
+{
+    return (first_autopat[(int)EVENT_TEXTPUTPRE] != NULL);
+}
+
 /*
  * Return TRUE when there is a TextYankPost autocommand defined.
  */
@@ -2367,7 +2394,7 @@ apply_autocmds_group(
 
     // Remember that FileType was triggered.  Used for did_filetype().
     if (event == EVENT_FILETYPE)
-	curbuf->b_did_filetype = TRUE;
+	curbuf->b_did_filetype = true;
 
     tail = gettail(fname);
 
@@ -2476,7 +2503,7 @@ apply_autocmds_group(
 	restore_search_patterns();
 	if (did_save_redobuff)
 	    restoreRedobuff(&save_redo);
-	curbuf->b_did_filetype = FALSE;
+	curbuf->b_did_filetype = false;
 	while (au_pending_free_buf != NULL)
 	{
 	    buf_T *b = au_pending_free_buf->b_next;
@@ -2518,7 +2545,7 @@ BYPASS_AU:
 	aubuflocal_remove(buf);
 
     if (retval == OK && event == EVENT_FILETYPE)
-	curbuf->b_au_did_filetype = TRUE;
+	curbuf->b_au_did_filetype = true;
 
     return retval;
 }
@@ -2609,11 +2636,7 @@ auto_next_pat(
     int		stop_at_last)	    // stop when 'last' flag is set
 {
     AutoPat	*ap;
-    AutoCmd	*cp;
-    char_u	*name;
-    char	*s;
     estack_T	*entry;
-    char_u	*namep;
 
     entry = ((estack_T *)exestack.ga_data) + exestack.ga_len - 1;
 
@@ -2637,12 +2660,17 @@ auto_next_pat(
 				      apc->sfname, apc->tail, ap->allow_dirs))
 		    : ap->buflocal_nr == apc->arg_bufnr)
 	    {
-		name = event_nr2name(apc->event);
-		s = _("%s Autocommands for \"%s\"");
-		namep = alloc(STRLEN(s) + STRLEN(name) + ap->patlen + 1);
+		string_T    *event_name;
+		char	    *fmt;
+		char_u	    *namep;
+		AutoCmd	    *cp;
+
+		event_name = event_nr2name(apc->event);
+		fmt = _("%s Autocommands for \"%s\"");
+		namep = alloc(STRLEN(fmt) + event_name->length + ap->patlen + 1);
 		if (namep != NULL)
 		{
-		    sprintf((char *)namep, s, (char *)name, (char *)ap->pat);
+		    sprintf((char *)namep, fmt, (char *)event_name->string, (char *)ap->pat);
 		    if (p_verbose >= 8)
 		    {
 			verbose_enter();
@@ -3344,7 +3372,6 @@ f_autocmd_get(typval_T *argvars, typval_T *rettv)
     AutoCmd	*ac;
     list_T	*event_list;
     dict_T	*event_dict;
-    char_u	*event_name = NULL;
     char_u	*pat = NULL;
     char_u	*name = NULL;
     int		group = AUGROUP_ALL;
@@ -3423,6 +3450,8 @@ f_autocmd_get(typval_T *argvars, typval_T *rettv)
     for (event = (event_T)0; (int)event < NUM_EVENTS;
 	    event = (event_T)((int)event + 1))
     {
+	string_T    *event_name;
+
 	if (event_arg != NUM_EVENTS && event != event_arg)
 	    continue;
 
@@ -3431,7 +3460,7 @@ f_autocmd_get(typval_T *argvars, typval_T *rettv)
 	// iterate through all the patterns for this autocmd event
 	FOR_ALL_AUTOCMD_PATTERNS(event, ap)
 	{
-	    char_u	*group_name;
+	    string_T	group_name;
 
 	    if (ap->pat == NULL)		// pattern has been removed
 		continue;
@@ -3442,7 +3471,11 @@ f_autocmd_get(typval_T *argvars, typval_T *rettv)
 	    if (pat != NULL && STRCMP(pat, ap->pat) != 0)
 		continue;
 
-	    group_name = get_augroup_name(NULL, ap->group);
+	    group_name.string = get_augroup_name(NULL, ap->group);
+	    if (group_name.string == NULL)
+		STR_LITERAL_SET(group_name, "");
+	    else
+		group_name.length = STRLEN(group_name.string);
 
 	    // iterate through all the commands for this pattern and add one
 	    // item for each cmd.
@@ -3456,10 +3489,10 @@ f_autocmd_get(typval_T *argvars, typval_T *rettv)
 		    return;
 		}
 
-		if (dict_add_string(event_dict, "event", event_name) == FAIL
-			|| dict_add_string(event_dict, "group",
-					group_name == NULL ? (char_u *)""
-							  : group_name) == FAIL
+		if (dict_add_string_len(event_dict, "event",
+			event_name->string, (int)event_name->length) == FAIL
+			|| dict_add_string_len(event_dict, "group",
+			    group_name.string, (int)group_name.length) == FAIL
 			|| (ap->buflocal_nr != 0
 				&& (dict_add_number(event_dict, "bufnr",
 						    ap->buflocal_nr) == FAIL))

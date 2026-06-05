@@ -584,7 +584,7 @@ may_do_incsearch_highlighting(
 
     // May redraw the status line to show the cursor position.
     if (p_ru && curwin->w_status_height > 0)
-	curwin->w_redr_status = TRUE;
+	curwin->w_redr_status = true;
 
     update_screen(UPD_SOME_VALID);
     highlight_match = FALSE;
@@ -614,14 +614,18 @@ may_adjust_incsearch_highlighting(
 	incsearch_state_T	*is_state,
 	int			c)
 {
-    int	    skiplen, patlen;
-    pos_T   t;
-    char_u  *pat;
-    int	    search_flags = SEARCH_NOOF;
-    int	    i;
-    int	    save;
-    int	    bslsh = FALSE;
-    int	    search_delim;
+    int		skiplen, patlen;
+    pos_T	t;
+    char_u	*pat;
+    char_u	*dircp = NULL;
+    char_u	*searchstr;
+    char_u	*strcopy = NULL;
+    size_t	searchstrlen;
+    size_t	patlen_s;
+    soffset_T	offset;
+    int		search_flags = SEARCH_NOOF;
+    int		i;
+    int		search_delim;
 
     // Parsing range may already set the last search pattern.
     // NOTE: must call restore_last_search_pattern() before returning!
@@ -639,31 +643,16 @@ may_adjust_incsearch_highlighting(
 	return FAIL;
     }
 
-    if (search_delim == ccline.cmdbuff[skiplen])
-    {
-	pat = last_search_pattern();
-	if (pat == NULL)
-	{
-	    restore_last_search_pattern();
-	    return FAIL;
-	}
-	skiplen = 0;
-	patlen = (int)last_search_pattern_len();
-    }
-    else
-	pat = ccline.cmdbuff + skiplen;
+    pat = ccline.cmdbuff + skiplen;
+    searchstr = pat;
+    searchstrlen = (size_t)patlen;
+    patlen_s = (size_t)(ccline.cmdlen - skiplen);
 
     // do not search for the search end delimiter,
     // unless it is part of the pattern
-    if (patlen > 2 && firstc == pat[patlen - 1])
-    {
-	patlen--;
-	if (pat[patlen - 1] == '\\')
-	{
-	    pat[patlen - 1] = firstc;
-	    bslsh = TRUE;
-	}
-    }
+    (void)parse_search_pattern_offset(&pat, &patlen_s, search_delim,
+				    SEARCH_OPT, &strcopy, &searchstr,
+				    &searchstrlen, &dircp, &offset);
 
     cursor_off();
     out_flush();
@@ -681,18 +670,39 @@ may_adjust_incsearch_highlighting(
     if (!p_hls)
 	search_flags += SEARCH_KEEP;
     ++emsg_off;
-    save = pat[patlen];
-    pat[patlen] = NUL;
     i = searchit(curwin, curbuf, &t, NULL,
 		 c == Ctrl_G ? FORWARD : BACKWARD,
-		 pat, patlen, count, search_flags, RE_SEARCH, NULL);
+		 searchstr, searchstrlen, count, search_flags, RE_SEARCH, NULL);
     --emsg_off;
-    pat[patlen] = save;
-    if (bslsh)
-	pat[patlen - 1] = '\\';
+    if (dircp != NULL)
+	*dircp = search_delim;
     if (i)
     {
-	is_state->search_start = is_state->match_start;
+	pos_T	match_start = is_state->match_start;
+	pos_T	match_end = is_state->match_end;
+	long	off = offset.off;
+
+	is_state->search_start = match_start;
+	if (!offset.line && (offset.end || off != 0))
+	{
+	    if (offset.end)
+	    {
+		is_state->search_start = match_end;
+		(void)decl(&is_state->search_start);
+	    }
+	    while (off > 0)
+	    {
+		if (incl(&is_state->search_start) == -1)
+		    break;
+		--off;
+	    }
+	    while (off < 0)
+	    {
+		if (decl(&is_state->search_start) == -1)
+		    break;
+		++off;
+	    }
+	}
 	is_state->match_end = t;
 	is_state->match_start = t;
 	if (c == Ctrl_T && firstc != '?')
@@ -733,6 +743,7 @@ may_adjust_incsearch_highlighting(
     }
     else
 	vim_beep(BO_ERROR);
+    vim_free(strcopy);
     restore_last_search_pattern();
     return FAIL;
 }
@@ -947,6 +958,7 @@ cmdline_wildchar_complete(
     int		cmdpos_before;
     int		options = WILD_NO_BEEP;
     int		wim_noselect = p_wmnu && (wim_flags[0] & WIM_NOSELECT);
+    int		wim_noinsert = p_wmnu && (wim_flags[0] & WIM_NOINSERT);
 
     if (wim_flags[wim_index] & WIM_BUFLASTUSED)
 	options |= WILD_BUFLASTUSED;
@@ -957,7 +969,8 @@ cmdline_wildchar_complete(
 		&& !*did_wild_list
 		&& (wim_flags[wim_index] & WIM_LIST))
 	{
-	    (void)showmatches(xp, FALSE, TRUE, wim_noselect);
+	    (void)showmatches(xp, FALSE, TRUE,
+		    p_wmnu ? wim_flags[wim_index] : 0);
 	    redrawcmd();
 	    *did_wild_list = TRUE;
 	}
@@ -995,6 +1008,8 @@ cmdline_wildchar_complete(
 	{
 	    if (wim_noselect || wim_list)
 		options |= WILD_NOSELECT;
+	    if (wim_noinsert)
+		options |= WILD_NOINSERT;
 	    res = nextwild(xp, WILD_EXPAND_KEEP, options, escape);
 	}
 
@@ -1017,26 +1032,28 @@ cmdline_wildchar_complete(
 	}
 
 	// Display matches
-	if (res == OK && xp->xp_numfiles > (wim_noselect ? 0 : 1))
+	if (res == OK && xp->xp_numfiles > ((wim_noselect || wim_noinsert) ? 0 : 1))
 	{
 	    if (wim_longest)
 	    {
 		int found_longest_prefix = (ccline.cmdpos != cmdpos_before);
 		if (wim_list || (p_wmnu && wim_full))
-		    (void)showmatches(xp, p_wmnu, wim_list, TRUE);
+		    (void)showmatches(xp, p_wmnu, wim_list, WIM_NOSELECT);
 		else if (!found_longest_prefix)
 		{
 		    int wim_list_next = (wim_flags[1] & WIM_LIST);
 		    int wim_full_next = (wim_flags[1] & WIM_FULL);
 		    int wim_noselect_next = (wim_flags[1] & WIM_NOSELECT);
+		    int wim_noinsert_next = (wim_flags[1] & WIM_NOINSERT);
 		    if (wim_list_next || (p_wmnu && (wim_full_next
-				    || wim_noselect_next)))
+				    || wim_noselect_next || wim_noinsert_next)))
 		    {
-			if (wim_full_next && !wim_noselect_next)
+			if (wim_full_next && !wim_noselect_next && !wim_noinsert_next)
 			    nextwild(xp, WILD_NEXT, options, escape);
 			else
 			    (void)showmatches(xp, p_wmnu, wim_list_next,
-				    wim_noselect_next);
+				    p_wmnu ? wim_flags[1] : 0);
+
 			if (wim_list_next)
 			    *did_wild_list = TRUE;
 		    }
@@ -1044,8 +1061,10 @@ cmdline_wildchar_complete(
 	    }
 	    else
 	    {
-		if (wim_list || (p_wmnu && (wim_full || wim_noselect)))
-		    (void)showmatches(xp, p_wmnu, wim_list, wim_noselect);
+		if (wim_list || (p_wmnu && (wim_full || wim_noselect
+				|| wim_noinsert)))
+		    (void)showmatches(xp, p_wmnu, wim_list,
+			    p_wmnu ? wim_flags[0] : 0);
 		else
 		    vim_beep(BO_WILD);
 	    }
@@ -1829,7 +1848,7 @@ getcmdline_int(
 	FOR_ALL_WINDOWS(wp)
 	    if (*p_stl != NUL || *wp->w_p_stl != NUL)
 	    {
-		wp->w_redr_status = TRUE;
+		wp->w_redr_status = true;
 		found_one = TRUE;
 	    }
 
@@ -2170,7 +2189,7 @@ getcmdline_int(
 		{
 		    // Trigger the popup menu when wildoptions=pum
 		    showmatches(&xpc, p_wmnu, wim_flags[wim_index] & WIM_LIST,
-			    wim_flags[0] & WIM_NOSELECT);
+			    p_wmnu ? wim_flags[0] : 0);
 		}
 		if (nextwild(&xpc, WILD_PREV, 0, firstc != '@') == OK
 			&& nextwild(&xpc, WILD_PREV, 0, firstc != '@') == OK)
@@ -2285,7 +2304,7 @@ getcmdline_int(
 		goto cmdline_not_changed;
 
 	case Ctrl_D:
-		if (showmatches(&xpc, FALSE, TRUE, wim_flags[0] & WIM_NOSELECT)
+		if (showmatches(&xpc, FALSE, TRUE, p_wmnu ? wim_flags[0] : 0)
 			== EXPAND_NOTHING)
 		    break;	// Use ^D as normal char instead
 
@@ -2686,7 +2705,17 @@ cmdline_changed:
 		&& (ccline.cmdpos != prev_cmdpos
 		    || (prev_cmdbuff != NULL &&
 			STRCMP(prev_cmdbuff, ccline.cmdbuff) != 0)))
+	{
 	    trigger_cmd_autocmd(cmdline_type, EVENT_CMDLINECHANGED);
+#ifdef FEAT_PROP_POPUP
+	    // Show popup updates from the autocmd without a manual :redraw.
+	    if (popup_need_redraw())
+	    {
+		update_screen(0);
+		redrawcmd();
+	    }
+#endif
+	}
 
 	// Trigger CursorMovedC autocommands.
 	if (ccline.cmdpos != prev_cmdpos)
@@ -2898,6 +2927,8 @@ check_opt_wim(void)
 	    new_wim_flags[idx] |= WIM_BUFLASTUSED;
 	else if (i == 8 && STRNCMP(p, "noselect", 8) == 0)
 	    new_wim_flags[idx] |= WIM_NOSELECT;
+	else if (i == 8 && STRNCMP(p, "noinsert", 8) == 0)
+	    new_wim_flags[idx] |= WIM_NOINSERT;
 	else
 	    return FAIL;
 	p += i;
@@ -4112,6 +4143,8 @@ redrawcmd(void)
 
     sb_text_restart_cmdline();
     msg_start();
+    // Reset lines_left so a wrapped cmdline isn't truncated by msg_no_more.
+    msg_starthere();
     redrawcmdprompt();
 
     // Don't use more prompt, truncate the cmdline if it doesn't fit.
@@ -4878,6 +4911,7 @@ open_cmdwin(void)
     exmode_active = 0;
 
     State = MODE_NORMAL;
+    check_cursor();
     setmouse();
     clear_showcmd();
 

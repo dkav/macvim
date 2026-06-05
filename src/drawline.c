@@ -1464,12 +1464,11 @@ win_line(
 	    {
 		area_highlighting = TRUE;
 		vi_attr = HL_ATTR(HLF_V);
-#if defined(FEAT_CLIPBOARD) && defined(FEAT_X11)
-		if (X_DISPLAY &&
-			((clip_star.available && !clip_star.owned
+#if defined(FEAT_CLIPBOARD) && (defined(FEAT_X11) || defined(FEAT_WAYLAND_CLIPBOARD))
+		if ((clip_star.available && !clip_star.owned
 						    && clip_isautosel_star())
-			    || (clip_plus.available && !clip_plus.owned
-						    && clip_isautosel_plus())))
+			|| (clip_plus.available && !clip_plus.owned
+						    && clip_isautosel_plus()))
 		    vi_attr = HL_ATTR(HLF_VNC);
 #endif
 	    }
@@ -2053,12 +2052,19 @@ win_line(
 		wlv.draw_state = WL_CMDLINE;
 		if (wp == cmdwin_win)
 		{
-		    // Draw the cmdline character.
 		    wlv.n_extra = 1;
-		    wlv.c_extra = cmdwin_type;
 		    wlv.c_final = NUL;
-		    wlv.char_attr =
-				hl_combine_attr(get_win_attr(wp), HL_ATTR(HLF_AT));
+		    if (wlv.row == wlv.startrow)
+		    {
+			wlv.c_extra = cmdwin_type;
+			wlv.char_attr = hl_combine_attr(
+				    get_win_attr(wp), HL_ATTR(HLF_AT));
+		    }
+		    else
+		    {
+			wlv.c_extra = ' ';
+			wlv.char_attr = get_win_attr(wp);
+		    }
 		}
 	    }
 #ifdef FEAT_FOLDING
@@ -2473,7 +2479,11 @@ win_line(
 		    // displaying that character.
 		    // Or when not wrapping and at the rightmost column.
 
-		    int only_below_follows = !wp->w_p_wrap && wlv.col == wp->w_width - 1;
+		    // Use the displayed width so a double-width or <Tab> last
+		    // character filling the rightmost column is detected too.
+		    int only_below_follows = !wp->w_p_wrap
+				 && wlv.col + win_chartabsize(wp, ptr, wlv.vcol)
+								>= wp->w_width;
 		    int suffix_flags = text_prop_suffix_flags[text_prop_next];
 
 		    text_prop_follows = (suffix_flags
@@ -4031,7 +4041,7 @@ win_line(
 		    curwin->w_cline_row = startrow;
 		    curwin->w_cline_height = wlv.row - startrow;
 #ifdef FEAT_FOLDING
-		    curwin->w_cline_folded = FALSE;
+		    curwin->w_cline_folded = false;
 #endif
 		    curwin->w_valid |= (VALID_CHEIGHT|VALID_CROW);
 		}

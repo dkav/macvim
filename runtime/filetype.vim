@@ -1,7 +1,7 @@
 " Vim support file to detect file types
 "
 " Maintainer:		The Vim Project <https://github.com/vim/vim>
-" Last Change:		2026 Mar 24
+" Last Change:		2026 May 29
 " Former Maintainer:	Bram Moolenaar <Bram@vim.org>
 
 " If the filetype can be detected from extension or file name(the final path component),
@@ -90,6 +90,9 @@ au BufNewFile,BufRead */.aptitude/config       setf aptconf
 
 " Arch Inventory file
 au BufNewFile,BufRead .arch-inventory,=tagging-method	setf arch
+
+" atlas or kawasaki_as
+au BufNewFile,BufRead *.as call dist#ft#FTas()
 
 " Active Server Pages (with Visual Basic Script)
 au BufNewFile,BufRead *.asa
@@ -890,7 +893,7 @@ au BufNewFile,BufRead requirements/*.txt	setf requirements
 au BufNewFile,BufRead requires/*.txt		setf requirements
 
 " Pkl
-au BufNewFile,BufRead *.pkl,*.pcf,pkl-lsp://*	setf pkl
+au BufNewFile,BufRead PklProject,*.pkl,*.pcf,pkl-lsp://*	setf pkl
 
 " WIC kickstarter files
 au BufNewFile,BufRead *.wks,*.wks.in,*.wks.inc	setf wks
@@ -1312,7 +1315,7 @@ au BufNewFile,BufRead *Xmodmap			setf xmodmap
 au BufNewFile,BufRead *.y			call dist#ft#FTy()
 
 " Yaml
-au BufNewFile,BufRead */.kube/config,*/.kube/kuberc	setf yaml
+au BufNewFile,BufRead buf.lock,*/.kube/config,*/.kube/kuberc	setf yaml
 
 " yum conf (close enough to dosini)
 au BufNewFile,BufRead */etc/yum.conf		setf dosini
@@ -1617,6 +1620,10 @@ au BufNewFile,BufRead *.txt
 	\|   setf text
 	\| endif
 
+" Ghostty configuration
+au BufNewFile,BufRead */ghostty/config                      setf ghostty
+au BufNewFile,BufRead */ghostty/themes/*                    call s:StarSetf('ghostty')
+au BufNewFile,BufRead */com.mitchellh.ghostty/config        setf ghostty
 
 
 " Generic log file

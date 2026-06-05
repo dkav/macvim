@@ -674,7 +674,7 @@ func Test_scroll_info_window()
   call ScrollInfoWindowTest("", 0, 1)
   call ScrollInfoWindowTest("pagedown", 1, 4)
   call ScrollInfoWindowTest("pagedown", 2, 7)
-  call ScrollInfoWindowTest("pagedown", 3, 11)
+  call ScrollInfoWindowTest("pagedown", 3, 10)
   call ScrollInfoWindowTest("pageup", 3, 1)
 endfunc
 
@@ -3696,10 +3696,16 @@ func Test_complete_opt_fuzzy()
   call feedkeys("Goa\<C-P>\<C-Y>\<Esc>", 'tx')
   call assert_equal('aaaa', getline('.'))
 
+  %d
+  set autoindent
+  set completeopt=menuone,fuzzy
+  call feedkeys("A\<TAB>hello world\<CR>word is on fire\<CR>w\<C-X>\<C-L>\<C-Y>", 'tx')
+  call assert_equal("\thello world", getline('.'))
+
   " clean up
   set omnifunc=
   bw!
-  set complete& completeopt&
+  set complete& completeopt& autoindent&
   autocmd! AAAAA_Group
   augroup! AAAAA_Group
   delfunc OnPumChange
@@ -6287,6 +6293,42 @@ func Test_ins_register_preinsert_autocomplete()
   set omnifunc& complete& completeopt& autocomplete&
   call test_override("char_avail", 0)
   delfunc TestOmni
+endfunc
+
+func Test_autocomplete_with_auto_format()
+  call test_override("char_avail", 1)
+  new
+  setlocal formatoptions=tcq textwidth=9 autocomplete noautoindent
+  call feedkeys("ia b c d\<Esc>ie f g\<Esc>", 'tx')
+  call assert_equal(['a b c e f', 'gd'], getline(1, '$'))
+
+  %delete
+  setlocal autoindent
+  call feedkeys("ia b c d\<Esc>ie f g\<Esc>", 'tx')
+  call assert_equal(['a b c e f', 'gd'], getline(1, '$'))
+
+  bw!
+  call test_override("char_avail", 0)
+endfunc
+
+func Test_completion_with_mapped_ctrl_r()
+  new
+  let b:n = 0
+  let @a = 'AABBCCDDEE'
+  " Ctrl-R mapping is triggered
+  inoremap <buffer> <C-R> <Cmd>let b:n += 1<CR>
+  inoremap <buffer> <F2> <Cmd>call complete(col('.'), [])<CR>
+  call feedkeys("i\<F2>\<*C-R>abcde\<Esc>", 'tx')
+  call assert_equal(1, b:n)
+  call assert_equal('abcde', getline('.'))
+
+  " Ctrl-X Ctrl-R still works with Ctrl-R mapped
+  call feedkeys("ccAAB\<*C-X>\<*C-R>\<*C-Y>\<Esc>", 'tx')
+  call assert_equal(1, b:n)
+  call assert_equal('AABBCCDDEE', getline('.'))
+
+  let @a = ''
+  bwipe!
 endfunc
 
 " vim: shiftwidth=2 sts=2 expandtab nofoldenable

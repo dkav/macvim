@@ -154,6 +154,9 @@ static termrequest_T rcs_status = TERMREQUEST_INIT;
 // Request window's position report:
 static termrequest_T winpos_status = TERMREQUEST_INIT;
 
+// Request DECRQM (DEC mode) report:
+static termrequest_T decrqm_status = TERMREQUEST_INIT;
+
 static termrequest_T *all_termrequests[] = {
     &crv_status,
     &u7_status,
@@ -165,6 +168,7 @@ static termrequest_T *all_termrequests[] = {
     &rbm_status,
     &rcs_status,
     &winpos_status,
+    &decrqm_status,
     NULL
 };
 
@@ -686,15 +690,17 @@ static tcap_entry_T builtin_sync_output[] = {
 };
 #endif
 
+#ifdef FEAT_TERMRESPONSE
 /*
  * List of DECRQM modes that Vim supports
  */
 static const int dec_modes[] = {
     2026,   // Synchronized output
-#ifdef UNIX
+# ifdef UNIX
     2048    // In-band terminal resize events
-#endif
+# endif
 };
+#endif
 
 #ifdef FEAT_TERMGUICOLORS
 /*
@@ -1545,8 +1551,10 @@ typedef struct {
 #define TPR_MOUSE		    3
 // term response indicates kitty
 #define TPR_KITTY		    4
+// can send DECRQM requests to terminal
+#define TPR_DECRQM		    5
 // table size
-#define TPR_COUNT		    5
+#define TPR_COUNT		    6
 
 static termprop_T term_props[TPR_COUNT];
 
@@ -1570,6 +1578,8 @@ init_term_props(int all)
     term_props[TPR_MOUSE].tpr_set_by_termresponse = TRUE;
     term_props[TPR_KITTY].tpr_name = "kitty";
     term_props[TPR_KITTY].tpr_set_by_termresponse = FALSE;
+    term_props[TPR_DECRQM].tpr_name = "decrqm";
+    term_props[TPR_DECRQM].tpr_set_by_termresponse = TRUE;
 
     for (i = 0; i < TPR_COUNT; ++i)
 	if (all || term_props[i].tpr_set_by_termresponse)
@@ -1593,7 +1603,8 @@ f_terminalprops(typval_T *argvars UNUSED, typval_T *rettv)
 
 	value[0] = term_props[i].tpr_status;
 	value[1] = NUL;
-	dict_add_string(rettv->vval.v_dict, term_props[i].tpr_name, value);
+	dict_add_string_len(rettv->vval.v_dict, term_props[i].tpr_name,
+	    value, (value[0] == NUL) ? 0 : 1);
     }
 # endif
 }
@@ -5182,16 +5193,21 @@ handle_version_response(int first, int *arg, int argc, char_u *tp)
 	if (version == 95)
 	{
 	    // Mac Terminal.app sends 1;95;0
+	    //
+	    // Terminal.app doesn't seem to handle DECRQM sequences
+	    // properly, see issue #19852.
 	    if (arg[0] == 1 && arg[2] == 0)
 	    {
 		term_props[TPR_UNDERLINE_RGB].tpr_status = TPR_YES;
 		term_props[TPR_MOUSE].tpr_status = TPR_MOUSE_SGR;
+		term_props[TPR_DECRQM].tpr_status = TPR_NO;
 	    }
 	    // iTerm2 sends 0;95;0
 	    else if (arg[0] == 0 && arg[2] == 0)
 	    {
 		// iTerm2 can do SGR mouse reporting
 		term_props[TPR_MOUSE].tpr_status = TPR_MOUSE_SGR;
+		term_props[TPR_DECRQM].tpr_status = TPR_YES;
 	    }
 	    // old iTerm2 sends 0;95;
 	    else if (arg[0] == 0 && arg[2] == -1)
@@ -5229,7 +5245,9 @@ handle_version_response(int first, int *arg, int argc, char_u *tp)
 	// Assuming any version number over 2500 is not an
 	// xterm (without the limit for rxvt and screen).
 	if (arg[1] >= 2500)
+	{
 	    term_props[TPR_UNDERLINE_RGB].tpr_status = TPR_YES;
+	}
 
 	else if (version == 136 && arg[2] == 0)
 	{
@@ -5257,6 +5275,7 @@ handle_version_response(int first, int *arg, int argc, char_u *tp)
 
 	    // Kitty can handle SGR mouse reporting.
 	    term_props[TPR_MOUSE].tpr_status = TPR_MOUSE_SGR;
+	    term_props[TPR_DECRQM].tpr_status = TPR_YES;
 	}
 
 	// GNU screen sends 83;30600;0, 83;40500;0, etc.
@@ -5267,6 +5286,9 @@ handle_version_response(int first, int *arg, int argc, char_u *tp)
 	{
 	    term_props[TPR_CURSOR_STYLE].tpr_status = TPR_NO;
 	    term_props[TPR_CURSOR_BLINK].tpr_status = TPR_NO;
+	    term_props[TPR_DECRQM].tpr_status = TPR_NO; // screen doesn't seem
+							// to handle DECRQM
+							// sequences
 	}
 
 	// Xterm first responded to this request at patch level
@@ -5347,6 +5369,23 @@ handle_version_response(int first, int *arg, int argc, char_u *tp)
 	    LOG_TR1("Sending cursor blink mode request");
 	    out_str(T_CRC);
 	    termrequest_sent(&rbm_status);
+	    need_flush = TRUE;
+	}
+
+	// Only request DEC modes via DECRQM when the terminal is known to
+	// handle it.  Not for Apple Terminal.app or GNU screen, they echo
+	// the trailing "p" to the screen.  See issue #19852.
+	if (decrqm_status.tr_progress == STATUS_GET
+		&& term_props[TPR_DECRQM].tpr_status == TPR_YES)
+	{
+	    MAY_WANT_TO_LOG_THIS;
+	    LOG_TR1("Sending DECRQM requests");
+	    for (int i = 0; i < (int)ARRAY_LENGTH(dec_modes); i++)
+	    {
+		vim_snprintf((char *)IObuff, IOSIZE, "\033[?%d$p", dec_modes[i]);
+		out_str(IObuff);
+	    }
+	    termrequest_sent(&decrqm_status);
 	    need_flush = TRUE;
 	}
 
@@ -5758,6 +5797,13 @@ handle_csi(
 	key_name[0] = (int)KS_EXTRA;
 	key_name[1] = (int)KE_IGNORE;
 
+#ifdef FEAT_TERMRESPONSE
+	// Mark the DECRQM request as answered so it is not sent again and
+	// stoptermcap() does not wait for it.
+	if (decrqm_status.tr_progress == STATUS_SENT)
+	    decrqm_status.tr_progress = STATUS_GOT;
+#endif
+
 	if (setting >= 0 && setting <= 4)
 	{
 	    LOG_TRN("Received DECRPM mode %d: %s", arg[0], tp);
@@ -5959,7 +6005,7 @@ check_for_color_response(char_u *resp, int len)
 			char *new_bg_val = (3 * '6' < *tp_r + *tp_g +
 					     *tp_b) ? "light" : "dark";
 
-			LOG_TRN("Received RBG response: %s", tp);
+			LOG_TRN("Received RBG response: r=%d g=%d b=%d", rval, gval, bval);
 #ifdef FEAT_TERMRESPONSE
 			rbg_status.tr_progress = STATUS_GOT;
 # ifdef FEAT_TERMINAL
@@ -5981,7 +6027,7 @@ check_for_color_response(char_u *resp, int len)
 #if defined(FEAT_TERMRESPONSE) && defined(FEAT_TERMINAL)
 		    else
 		    {
-			LOG_TRN("Received RFG response: %s", tp);
+			LOG_TRN("Received RFG response: r=%d g=%d b=%d", rval, gval, bval);
 			rfg_status.tr_progress = STATUS_GOT;
 			fg_r = rval;
 			fg_g = gval;
@@ -7993,24 +8039,6 @@ term_replace_keycodes(char_u *ta_buf, int ta_len, int len_arg)
 }
 
 /*
- * Query the settings for the DEC modes we support
- */
-    void
-send_decrqm_modes(void)
-{
-    if (termcap_active && cur_tmode == TMODE_RAW)
-    {
-	// Request setting of relevant DEC modes via DECRQM
-	for (int i = 0; i < (int)ARRAY_LENGTH(dec_modes); i++)
-	{
-	    vim_snprintf((char *)IObuff, IOSIZE, "\033[?%d$p", dec_modes[i]);
-	    out_str(IObuff);
-	}
-	out_flush();
-    }
-}
-
-/*
  * Should be called when cleaning up terminal state.
  */
     void
@@ -8067,6 +8095,17 @@ term_set_win_resize(bool state)
     }
 }
 #endif
+
+    int
+sync_output_active(void)
+{
+#ifdef FEAT_GUI
+    if (gui.in_use)
+	return TRUE;
+#endif
+    return p_tsy && (sync_output_setting == 1 || sync_output_setting == 2)
+	&& *T_BSU != NUL && *T_ESU != NUL;
+}
 
 /*
  * Enable or disable synchronized output if possible. Specification can be found

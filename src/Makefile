@@ -1232,6 +1232,23 @@ GTK_MAN_TARGETS = yes
 GTK_TESTTARGET  = gui
 GTK_BUNDLE	=
 
+### GTK4 GUI
+GTK4_SRC	= gui.c gui_gtk4.c gui_gtk4_f.c \
+			$(GRESOURCE_SRC)
+GTK4_OBJ	= objects/gui.o objects/gui_gtk4.o \
+			objects/gui_gtk4_f.o \
+			$(GRESOURCE_OBJ)
+GTK4_DEFS	= -DFEAT_GUI_GTK $(NARROW_PROTO)
+GTK4_IPATH	= $(GUI_INC_LOC)
+GTK4_LIBS_DIR	= $(GUI_LIB_LOC)
+GTK4_LIBS1	=
+GTK4_LIBS2	= $(GTK_LIBNAME)
+GTK4_INSTALL	= install_normal install_gui_extra
+GTK4_TARGETS	= installglinks
+GTK4_MAN_TARGETS = yes
+GTK4_TESTTARGET	= gui
+GTK4_BUNDLE	=
+
 ### Motif GUI
 MOTIF_SRC	= gui.c gui_motif.c gui_x11.c gui_beval.c \
 			gui_xmdlg.c gui_xmebw.c
@@ -1306,8 +1323,8 @@ MACVIMGUI_BUNDLE = macvim
 MACVIMGUI_TESTARG = VIMPROG=../$(RELEASEDIR)/MacVim.app/Contents/MacOS/$(VIMTARGET)
 
 # All GUI files
-ALL_GUI_SRC  = gui.c gui_gtk.c gui_gtk_f.c gui_motif.c gui_xmdlg.c gui_xmebw.c gui_gtk_x11.c gui_x11.c gui_haiku.cc
-ALL_GUI_PRO  = proto/gui.pro proto/gui_gtk.pro proto/gui_motif.pro proto/gui_xmdlg.pro proto/gui_gtk_x11.pro proto/gui_x11.pro proto/gui_w32.pro proto/gui_photon.pro
+ALL_GUI_SRC  = gui.c gui_gtk.c gui_gtk_f.c gui_gtk4.c gui_gtk4_f.c gui_motif.c gui_xmdlg.c gui_xmebw.c gui_gtk_x11.c gui_x11.c gui_haiku.cc
+ALL_GUI_PRO  = proto/gui.pro proto/gui_gtk.pro proto/gui_gtk4.pro proto/gui_motif.pro proto/gui_xmdlg.pro proto/gui_gtk_x11.pro proto/gui_x11.pro proto/gui_w32.pro proto/gui_photon.pro
 
 ALL_GUI_SRC  += MacVim/gui_macvim.m MacVim/MMBackend.m MacVim/MacVim.m
 
@@ -1573,6 +1590,7 @@ BASIC_SRC = \
 	session.c \
 	sha256.c \
 	sign.c \
+	socketserver.c \
 	sound.c \
 	spell.c \
 	spellfile.c \
@@ -1635,8 +1653,6 @@ genwaylandproto:
 # Needed for parallel jobs to work
 auto/wayland/ext-data-control-v1.h: auto/wayland/ext-data-control-v1.c
 auto/wayland/wlr-data-control-unstable-v1.h: auto/wayland/wlr-data-control-unstable-v1.c
-auto/wayland/primary-selection-unstable-v1.h: auto/wayland/primary-selection-unstable-v1.c
-auto/wayland/xdg-shell.h: auto/wayland/xdg-shell.c
 
 # Unittest files
 JSON_TEST_SRC = json_test.c
@@ -1753,6 +1769,7 @@ OBJ_COMMON = \
 	objects/session.o \
 	objects/sha256.o \
 	objects/sign.o \
+	objects/socketserver.o \
 	objects/sound.o \
 	objects/spell.o \
 	objects/spellfile.o \
@@ -2173,7 +2190,9 @@ proto/%.pro: %.c
 	@$(PYTHON) $(GEN_PROTO_CMD) $< $(GEN_PROTO_ARG)
 
 proto/gui_gtk_gresources.pro: auto/gui_gtk_gresources.c
-	@$(PYTHON) $(GEN_PROTO_CMD) $< $(GEN_PROTO_ARG)
+	@if test -n "$(GLIB_COMPILE_RESOURCES)"; then \
+		$(PYTHON) $(GEN_PROTO_CMD) $< $(GEN_PROTO_ARG) ; \
+	fi
 
 notags:
 	-rm -f tags
@@ -3202,7 +3221,9 @@ GUI_GTK_RES_INPUTS = \
 	../pixmaps/stock_vim_window_split_vertical.png
 
 auto/gui_gtk_gresources.c: gui_gtk_res.xml $(GUI_GTK_RES_INPUTS)
-	$(GLIB_COMPILE_RESOURCES) --target=$@ --sourcedir=../pixmaps --generate --c-name=gui_gtk --manual-register gui_gtk_res.xml
+	if test -z "$(GLIB_COMPILE_RESOURCES)"; then touch $@; else \
+		$(GLIB_COMPILE_RESOURCES) --target=$@ --sourcedir=../pixmaps --generate --c-name=gui_gtk --manual-register gui_gtk_res.xml; \
+	fi
 auto/gui_gtk_gresources.h: gui_gtk_res.xml $(GUI_GTK_RES_INPUTS)
 	if test -z "$(GLIB_COMPILE_RESOURCES)"; then touch $@; else \
 		$(GLIB_COMPILE_RESOURCES) --target=$@ --sourcedir=../pixmaps --generate --c-name=gui_gtk --manual-register gui_gtk_res.xml; \
@@ -3392,6 +3413,13 @@ objects/gui_gtk_gresources.o: auto/gui_gtk_gresources.c
 
 objects/gui_gtk_x11.o: gui_gtk_x11.c
 	$(CCC) -o $@ gui_gtk_x11.c
+
+objects/gui_gtk4.o: gui_gtk4.c
+	$(CCC) -o $@ gui_gtk4.c
+
+objects/gui_gtk4_f.o: gui_gtk4_f.c
+	$(CCC) -o $@ gui_gtk4_f.c
+
 
 objects/gui_haiku.o: gui_haiku.cc
 	$(CCC) -o $@ gui_haiku.cc
@@ -3600,6 +3628,9 @@ objects/sha256.o: sha256.c
 objects/sign.o: sign.c
 	$(CCC) -o $@ sign.c
 
+objects/socketserver.o: socketserver.c
+	$(CCC) -o $@ socketserver.c
+
 objects/sound.o: sound.c
 	$(CCC) -o $@ sound.c
 
@@ -3707,12 +3738,6 @@ objects/wlr-data-control-unstable-v1.o: auto/wayland/wlr-data-control-unstable-v
 
 objects/ext-data-control-v1.o: auto/wayland/ext-data-control-v1.c
 	$(CCC) $(WAYLAND_CFLAGS) $(WAYLAND_CPPFLAGS) -o $@ auto/wayland/ext-data-control-v1.c
-
-objects/xdg-shell.o: auto/wayland/xdg-shell.c
-	$(CCC) $(WAYLAND_CFLAGS) $(WAYLAND_CPPFLAGS) -o $@ auto/wayland/xdg-shell.c
-
-objects/primary-selection-unstable-v1.o: auto/wayland/primary-selection-unstable-v1.c
-	$(CCC) $(WAYLAND_CFLAGS) $(WAYLAND_CPPFLAGS) -o $@ auto/wayland/primary-selection-unstable-v1.c
 
 objects/netbeans.o: netbeans.c
 	$(CCC) -o $@ netbeans.c
@@ -4378,6 +4403,11 @@ objects/sign.o: sign.c vim.h protodef.h auto/config.h feature.h os_unix.h ascii.
   structs.h regexp.h gui.h libvterm/include/vterm.h \
   libvterm/include/vterm_keycodes.h xdiff/xdiff.h xdiff/../vim.h alloc.h \
   ex_cmds.h spell.h proto.h globals.h errors.h
+objects/socketserver.o: socketserver.c vim.h protodef.h auto/config.h feature.h \
+  os_unix.h ascii.h keymap.h termdefs.h macros.h option.h beval.h \
+  structs.h regexp.h gui.h libvterm/include/vterm.h \
+  libvterm/include/vterm_keycodes.h xdiff/xdiff.h xdiff/../vim.h alloc.h \
+  ex_cmds.h spell.h proto.h globals.h errors.h
 objects/sound.o: sound.c vim.h protodef.h auto/config.h feature.h os_unix.h \
   ascii.h keymap.h termdefs.h macros.h option.h beval.h \
   structs.h regexp.h gui.h libvterm/include/vterm.h \
@@ -4568,6 +4598,11 @@ objects/gui_gtk.o: gui_gtk.c vim.h protodef.h auto/config.h feature.h os_unix.h 
   structs.h regexp.h gui.h libvterm/include/vterm.h \
   libvterm/include/vterm_keycodes.h xdiff/xdiff.h xdiff/../vim.h alloc.h \
   ex_cmds.h spell.h proto.h globals.h errors.h ../pixmaps/stock_icons.h
+objects/gui_gtk4.o: gui_gtk4.c vim.h protodef.h auto/config.h feature.h os_unix.h \
+  ascii.h keymap.h termdefs.h macros.h option.h beval.h \
+  structs.h regexp.h gui.h libvterm/include/vterm.h \
+  libvterm/include/vterm_keycodes.h xdiff/xdiff.h xdiff/../vim.h alloc.h \
+  ex_cmds.h spell.h proto.h globals.h errors.h
 objects/gui_gtk_x11.o: gui_gtk_x11.c vim.h protodef.h auto/config.h feature.h \
   os_unix.h ascii.h keymap.h termdefs.h macros.h option.h beval.h \
   structs.h regexp.h gui.h libvterm/include/vterm.h \
@@ -4835,6 +4870,7 @@ proto/search.pro: search.c
 proto/session.pro: session.c
 proto/sha256.pro: sha256.c
 proto/sign.pro: sign.c
+proto/socketserver.pro: socketserver.c
 proto/sound.pro: sound.c
 proto/spell.pro: spell.c
 proto/spellfile.pro: spellfile.c
@@ -4873,6 +4909,7 @@ proto/winclip.pro: winclip.c
 proto/window.pro: window.c
 proto/gui.pro: gui.c
 proto/gui_gtk.pro: gui_gtk.c
+proto/gui_gtk4.pro: gui_gtk4.c
 proto/gui_motif.pro: gui_motif.c
 proto/gui_xmdlg.pro: gui_xmdlg.c
 proto/gui_gtk_x11.pro: gui_gtk_x11.c

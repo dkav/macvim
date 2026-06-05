@@ -305,9 +305,9 @@ ml_open(buf_T *buf)
      * When 'updatecount' is non-zero swap file may be opened later.
      */
     if (p_uc && buf->b_p_swf)
-	buf->b_may_swap = TRUE;
+	buf->b_may_swap = true;
     else
-	buf->b_may_swap = FALSE;
+	buf->b_may_swap = false;
 
     /*
      * Open the memfile.  No swap file is created yet.
@@ -793,7 +793,7 @@ ml_open_file(buf_T *buf)
 	fname = vim_tempname('s', FALSE);
 	if (fname != NULL)
 	    (void)mf_open_file(mfp, fname);	// consumes fname!
-	buf->b_may_swap = FALSE;
+	buf->b_may_swap = false;
 	return;
     }
 #endif
@@ -851,7 +851,7 @@ ml_open_file(buf_T *buf)
     }
 
     // don't try to open a swap file again
-    buf->b_may_swap = FALSE;
+    buf->b_may_swap = false;
 }
 
 /*
@@ -1021,7 +1021,7 @@ set_b0_fname(ZERO_BL *b0p, buf_T *buf)
 	forward_slash(b0p->b0_fname);
 # endif
 #else
-	size_t	flen, ulen;
+	size_t	flen;
 	char_u	uname[B0_UNAME_SIZE];
 
 	/*
@@ -1031,11 +1031,12 @@ set_b0_fname(ZERO_BL *b0p, buf_T *buf)
 	 * First replace home dir path with "~/" with home_replace().
 	 * Then insert the user name to get "~user/".
 	 */
-	home_replace(NULL, buf->b_ffname, b0p->b0_fname,
+	flen = home_replace(NULL, buf->b_ffname, b0p->b0_fname,
 						   B0_FNAME_SIZE_CRYPT, TRUE);
 	if (b0p->b0_fname[0] == '~')
 	{
-	    flen = STRLEN(b0p->b0_fname);
+	    size_t  ulen;
+
 	    // If there is no user name or it is too long, don't use "~/"
 	    if (get_user_name(uname, B0_UNAME_SIZE) == FAIL
 		   || (ulen = STRLEN(uname)) + flen > B0_FNAME_SIZE_CRYPT - 1)
@@ -1690,6 +1691,15 @@ ml_recover(int checkext)
 			dp->db_txt_end = page_count * mfp->mf_page_size;
 		    }
 
+		    if (dp->db_txt_start < HEADER_SIZE
+			    || dp->db_txt_start > dp->db_txt_end)
+		    {
+			ml_append(lnum++, (char_u *)_("??? block header corrupted"),
+								    (colnr_T)0, TRUE);
+			++error;
+			has_error = TRUE;
+			dp->db_txt_start = dp->db_txt_end;
+		    }
 		    // Make sure there is a NUL at the end of the block so we
 		    // don't go over the end when copying text.
 		    *((char_u *)dp + dp->db_txt_end - 1) = NUL;
@@ -2225,9 +2235,11 @@ get_b0_dict(char_u *fname, dict_T *d)
 	if (read_eintr(fd, &b0, sizeof(b0)) == sizeof(b0))
 	{
 	    if (ml_check_b0_id(&b0) == FAIL)
-		dict_add_string(d, "error", (char_u *)"Not a swap file");
+		dict_add_string_len(d, "error",
+		    (char_u *)"Not a swap file", STRLEN_LITERAL("Not a swap file"));
 	    else if (b0_magic_wrong(&b0))
-		dict_add_string(d, "error", (char_u *)"Magic number mismatch");
+		dict_add_string_len(d, "error",
+		    (char_u *)"Magic number mismatch", STRLEN_LITERAL("Magic number mismatch"));
 	    else
 	    {
 		// we have swap information
@@ -2245,11 +2257,11 @@ get_b0_dict(char_u *fname, dict_T *d)
 	    }
 	}
 	else
-	    dict_add_string(d, "error", (char_u *)"Cannot read file");
+	    dict_add_string_len(d, "error", (char_u *)"Cannot read file", STRLEN_LITERAL("Cannot read file"));
 	close(fd);
     }
     else
-	dict_add_string(d, "error", (char_u *)"Cannot open file");
+	dict_add_string_len(d, "error", (char_u *)"Cannot open file", STRLEN_LITERAL("Cannot open file"));
 }
 #endif
 
@@ -2442,9 +2454,9 @@ recov_file_names(char_u **names, char_u *path, int prepend_dot)
     char_u	*p;
     int		i;
 #ifndef MSWIN
-    int	    shortname = curbuf->b_shortname;
+    bool    shortname = curbuf->b_shortname;
 
-    curbuf->b_shortname = FALSE;
+    curbuf->b_shortname = false;
 #endif
     string_T	ret;
 
@@ -2493,7 +2505,7 @@ recov_file_names(char_u **names, char_u *path, int prepend_dot)
     /*
      * Also try with 'shortname' set, in case the file is on a DOS filesystem.
      */
-    curbuf->b_shortname = TRUE;
+    curbuf->b_shortname = true;
 # ifdef VMS
     names[num_names] = modname(path, (char_u *)"_sw%", FALSE);
 # else
@@ -5108,7 +5120,7 @@ findswapname(
 		    vim_free(fname2);
 		    if (same)
 		    {
-			buf->b_shortname = TRUE;
+			buf->b_shortname = true;
 			vim_free(fname);
 			fname = makeswapname(buf_fname, buf->b_ffname,
 							       buf, dir_name);
@@ -5178,7 +5190,7 @@ findswapname(
 		fname[n - 1] = 'p';
 		if (r >= 0)		    // "file.swx" seems to exist
 		{
-		    buf->b_shortname = TRUE;
+		    buf->b_shortname = true;
 		    vim_free(fname);
 		    fname = makeswapname(buf_fname, buf->b_ffname,
 							       buf, dir_name);
@@ -5332,24 +5344,32 @@ findswapname(
 		    if (swap_exists_action != SEA_NONE
 						  && choice == SEA_CHOICE_NONE)
 		    {
-			char_u	*name;
-			int	dialog_result;
-			size_t  len = STRLEN(_("Swap file \""));
+			string_T    prefix = {(char_u *)_("Swap file \""), 0};
+			string_T    suffix = {(char_u *)_("\" already exists!"), 0};
+			size_t	    message_size;
+			string_T    message;
+			char_u	    *tofree;
+			int	    dialog_result;
 
-			name = alloc(STRLEN(fname)
-				+ len
-				+ STRLEN(_("\" already exists!")) + 5);
-			if (name != NULL)
+			prefix.length = STRLEN(prefix.string);
+			suffix.length = STRLEN(suffix.string);
+			message_size = prefix.length
+				+ STRLEN(fname)
+				+ suffix.length + 5;
+			message.string = tofree = alloc(message_size);
+			if (message.string != NULL)
 			{
-			    STRCPY(name, _("Swap file \""));
-			    home_replace(NULL, fname, name + len, 1000, TRUE);
-			    STRCAT(name, _("\" already exists!"));
+			    STRCPY(message.string, prefix.string);
+			    message.length = prefix.length;
+			    message.length += home_replace(NULL, fname,
+				message.string + message.length, (int)(message_size - message.length), TRUE);
+			    STRCPY(message.string + message.length, suffix.string);
 			}
+			else
+			    message.string = (char_u *)_("Swap file already exists!");
 			dialog_result = do_dialog(VIM_WARNING,
 				    (char_u *)_("VIM - ATTENTION"),
-				    name == NULL
-					?  (char_u *)_("Swap file already exists!")
-					: name,
+				    message.string,
 # ifdef HAVE_PROCESS_STILL_RUNNING
 				    process_still_running
 					? (char_u *)_("&Open Read-Only\n&Edit anyway\n&Recover\n&Quit\n&Abort") :
@@ -5362,7 +5382,7 @@ findswapname(
 			    dialog_result++;
 # endif
 			choice = dialog_result;
-			vim_free(name);
+			vim_free(tofree);
 
 			// pretend screen didn't scroll, need redraw anyway
 			msg_scrolled = 0;
@@ -6234,7 +6254,7 @@ goto_byte(long cnt)
 	curwin->w_cursor.lnum = lnum;
 	curwin->w_cursor.col = (colnr_T)boff;
 	curwin->w_cursor.coladd = 0;
-	curwin->w_set_curswant = TRUE;
+	curwin->w_set_curswant = true;
     }
     check_cursor();
 

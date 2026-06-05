@@ -1931,6 +1931,11 @@ typedef struct
 #else
 # define TERM_FUNC(name) NULL
 #endif
+#ifdef FEAT_TABPANEL
+# define TABPANEL_FUNC(name) name
+#else
+# define TABPANEL_FUNC(name) NULL
+#endif
 
 static const funcentry_T global_functions[] =
 {
@@ -2992,6 +2997,10 @@ static const funcentry_T global_functions[] =
 			ret_number,	    f_tabpagenr},
     {"tabpagewinnr",	1, 2, FEARG_1,	    arg2_number_string,
 			ret_number,	    f_tabpagewinnr},
+    {"tabpanel_getinfo", 0, 0, 0,	    NULL,
+			ret_dict_any,	    TABPANEL_FUNC(f_tabpanel_getinfo)},
+    {"tabpanel_scroll",	1, 2, FEARG_1,	    arg2_number_dict_any,
+			ret_bool,	    TABPANEL_FUNC(f_tabpanel_scroll)},
     {"tagfiles",	0, 0, 0,	    NULL,
 			ret_list_string,    f_tagfiles},
     {"taglist",		1, 2, FEARG_1,	    arg2_string,
@@ -4391,6 +4400,9 @@ f_did_filetype(typval_T *argvars UNUSED, typval_T *rettv UNUSED)
 f_echoraw(typval_T *argvars, typval_T *rettv UNUSED)
 {
     char_u *str;
+
+    if (check_secure())
+	return;
 
     if (in_vim9script() && check_for_string_arg(argvars, 0) == FAIL)
 	return;
@@ -7138,6 +7150,13 @@ f_has(typval_T *argvars, typval_T *rettv)
 		0
 #endif
 		},
+	{"gui_gtk4",
+#if defined(FEAT_GUI_GTK) && defined(USE_GTK4)
+		1
+#else
+		0
+#endif
+		},
 	{"gui_gnome",
 #ifdef FEAT_GUI_GNOME
 		1
@@ -7533,6 +7552,13 @@ f_has(typval_T *argvars, typval_T *rettv)
 		0
 #endif
 		},
+	{"statusline_click",
+#ifdef FEAT_STL_OPT
+		1
+#else
+		0
+#endif
+		},
 	{"netbeans_intg",
 #ifdef FEAT_NETBEANS_INTG
 		1
@@ -7711,13 +7737,6 @@ f_has(typval_T *argvars, typval_T *rettv)
 		},
 	{"wayland_clipboard",
 #ifdef FEAT_WAYLAND_CLIPBOARD
-		1
-#else
-		0
-#endif
-		},
-	{"wayland_focus_steal",
-#ifdef FEAT_WAYLAND_CLIPBOARD_FS
 		1
 #else
 		0
@@ -10449,6 +10468,7 @@ f_getreginfo(typval_T *argvars, typval_T *rettv)
 {
     int		regname;
     char_u	buf[NUMBUFLEN + 2];
+    size_t	buflen;
     long	reglen = 0;
     dict_T	*dict;
     list_T	*list;
@@ -10472,23 +10492,34 @@ f_getreginfo(typval_T *argvars, typval_T *rettv)
 	return;
     (void)dict_add_list(dict, "regcontents", list);
 
-    buf[0] = NUL;
-    buf[1] = NUL;
     switch (get_reg_type(regname, &reglen))
     {
-	case MLINE: buf[0] = 'V'; break;
-	case MCHAR: buf[0] = 'v'; break;
+	case MLINE:
+	    buf[0] = 'V';
+	    buf[1] = NUL;
+	    buflen = 1;
+	    break;
+	case MCHAR:
+	    buf[0] = 'v';
+	    buf[1] = NUL;
+	    buflen = 1;
+	    break;
 	case MBLOCK:
-		    vim_snprintf((char *)buf, sizeof(buf), "%c%ld", Ctrl_V,
-			    reglen + 1);
-		    break;
+	    buflen = vim_snprintf_safelen((char *)buf, sizeof(buf),
+		"%c%ld", Ctrl_V, reglen + 1);
+	    break;
+	default:
+	    buf[0] = NUL;
+	    buflen = 0;
+	    break;
     }
-    (void)dict_add_string(dict, (char *)"regtype", buf);
+    (void)dict_add_string_len(dict, (char *)"regtype", buf, (int)buflen);
 
     buf[0] = get_register_name(get_unname_register());
     buf[1] = NUL;
+    buflen = (buf[0] == NUL) ? 0 : 1;
     if (regname == '"')
-	(void)dict_add_string(dict, (char *)"points_to", buf);
+	(void)dict_add_string_len(dict, (char *)"points_to", buf, (int)buflen);
     else
     {
 	dictitem_T	*item = dictitem_alloc((char_u *)"isunnamed");
@@ -10506,11 +10537,11 @@ f_getreginfo(typval_T *argvars, typval_T *rettv)
     static void
 return_register(int regname, typval_T *rettv)
 {
-    char_u buf[2] = {0, 0};
+    char_u buf[2] = {NUL, NUL};
 
     buf[0] = (char_u)regname;
     rettv->v_type = VAR_STRING;
-    rettv->vval.v_string = vim_strsave(buf);
+    rettv->vval.v_string = vim_strnsave(buf, (buf[0] == NUL) ? 0 : 1);
 }
 
 /*
@@ -10617,7 +10648,7 @@ repeat_string(typval_T *str_tv, int n, typval_T *rettv)
     int		slen;
     int		len;
     char_u	*r;
-    int		i;
+    int		done;
 
     p = tv_get_string(str_tv);
     rettv->v_type = VAR_STRING;
@@ -10632,8 +10663,17 @@ repeat_string(typval_T *str_tv, int n, typval_T *rettv)
     if (r == NULL)
 	return;
 
-    for (i = 0; i < n; i++)
-	mch_memmove(r + i * slen, p, (size_t)slen);
+    mch_memmove(r, p, (size_t)slen);
+    done = slen;
+    while (done < len)
+    {
+	int copy_len = done;
+
+	if (copy_len > len - done)
+	    copy_len = len - done;
+	mch_memmove(r + done, r, (size_t)copy_len);
+	done += copy_len;
+    }
     r[len] = NUL;
 
     rettv->vval.v_string = r;
@@ -10875,7 +10915,7 @@ search_cmn(typval_T *argvars, pos_T *match_pos, int *flagsp)
     if (flags & SP_NOMOVE)
 	curwin->w_cursor = save_cursor;
     else
-	curwin->w_set_curswant = TRUE;
+	curwin->w_set_curswant = true;
 theend:
     p_ws = save_p_ws;
 
@@ -11467,7 +11507,7 @@ set_position(typval_T *argvars, typval_T *rettv, int charpos)
 	if (curswant >= 0)
 	{
 	    curwin->w_curswant = curswant - 1;
-	    curwin->w_set_curswant = FALSE;
+	    curwin->w_set_curswant = false;
 	}
 	check_cursor();
 	rettv->vval.v_number = 0;
@@ -12018,7 +12058,7 @@ f_spellbadword(typval_T *argvars UNUSED, typval_T *rettv)
 	if (len != 0)
 	{
 	    word = ml_get_cursor();
-	    curwin->w_set_curswant = TRUE;
+	    curwin->w_set_curswant = true;
 	}
     }
     else if (*curbuf->b_s.b_p_spl != NUL)

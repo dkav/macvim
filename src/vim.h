@@ -691,6 +691,7 @@ extern int (*dyn_libintl_wputenv)(const wchar_t *envstring);
 #define POPF_INFO_MENU	0x400	// align info popup with popup menu
 #define POPF_POSINVERT	0x800	// vertical position can be inverted
 #define POPF_OPACITY 0x1000	// popup has opacity/transparency setting
+#define POPF_CLIPWINDOW	0x2000	// confine popup to its host window's rect
 
 // flags used in w_popup_handled
 #define POPUP_HANDLED_1	    0x01    // used by mouse_find_win()
@@ -906,6 +907,7 @@ extern int (*dyn_libintl_wputenv)(const wchar_t *envstring);
 #define WILD_NOSELECT		    0x4000
 #define WILD_MAY_EXPAND_PATTERN	    0x8000
 #define WILD_FUNC_TRIGGER	    0x10000 // called from wildtrigger()
+#define WILD_NOINSERT		    0x20000
 
 // Flags for expand_wildcards()
 #define EW_DIR		0x01	// include directory names
@@ -1096,7 +1098,7 @@ extern int (*dyn_libintl_wputenv)(const wchar_t *envstring);
 #define FM_BACKWARD	0x01	// search backwards
 #define FM_FORWARD	0x02	// search forwards
 #define FM_BLOCKSTOP	0x04	// stop at start/end of block
-#define FM_SKIPCOMM	0x08	// skip comments
+#define FM_SKIPCOMM	0x08	// skip comments (cursor must start outside)
 
 // Values for action argument for do_buffer() and close_buffer()
 #define DOBUF_GOTO	0	// go to specified buffer
@@ -1485,6 +1487,8 @@ enum auto_event
     EVENT_TEXTCHANGEDI,		// text was modified in Insert mode
     EVENT_TEXTCHANGEDP,		// TextChangedI with popup menu visible
     EVENT_TEXTCHANGEDT,		// text was modified in Terminal mode
+    EVENT_TEXTPUTPOST,		// after some text was put
+    EVENT_TEXTPUTPRE,		// before some text was put
     EVENT_TEXTYANKPOST,		// after some text was yanked
     EVENT_USER,			// user defined autocommand
     EVENT_VIMENTER,		// after starting Vim
@@ -1536,6 +1540,7 @@ typedef enum
     , HLF_S	    // status lines
     , HLF_SNC	    // status lines of not-current windows
     , HLF_C	    // column to separate vertically split windows
+    , HLF_CNC	    // column to separate vertically split non-current windows
     , HLF_T	    // Titles for output from ":set all", ":autocmd" etc.
     , HLF_V	    // Visual mode
     , HLF_VNC	    // Visual mode, autoselecting and not clipboard owner
@@ -1566,6 +1571,9 @@ typedef enum
     , HLF_PST	    // popup menu scrollbar thumb
     , HLF_PMB	    // popup menu border
     , HLF_PMS	    // popup menu shadow
+    , HLF_POP	    // popup window body
+    , HLF_POPB	    // popup window border
+    , HLF_POPT	    // popup window title
     , HLF_TP	    // tabpage line
     , HLF_TPS	    // tabpage line selected
     , HLF_TPF	    // tabpage line filler
@@ -1587,10 +1595,11 @@ typedef enum
 // The HL_FLAGS must be in the same order as the HLF_ enums!
 // When changing this also adjust the default for 'highlight'.
 #define HL_FLAGS {'8', '~', '@', 'd', 'e', 'h', 'i', 'l', 'y', 'm', 'M', \
-		  'n', 'a', 'b', 'N', 'G', 'O', 'r', 's', 'S', 'c', 't', 'v', 'V', \
+		  'n', 'a', 'b', 'N', 'G', 'O', 'r', 's', 'S', 'c', '|', 't', 'v', 'V', \
 		  'w', 'W', 'f', 'F', 'A', 'C', 'D', 'T', 'E', '-', '>', \
 		  'B', 'P', 'R', 'L', \
 		  '+', '=', 'k', '<','[', ']', '{', '}', 'x', 'X', 'j', 'H', \
+		  'p', 'J', 'Q', \
 		  '*', '#', '_', '!', '.', 'o', 'q', \
 		  'z', 'Z', 'g', \
 		  '%', '^', '&', 'I', '('}
@@ -2361,7 +2370,7 @@ typedef struct
     Atom	sel_atom;	// PRIMARY/CLIPBOARD selection ID
 # endif
 
-# ifdef FEAT_GUI_GTK
+# if defined(FEAT_GUI_GTK) && !defined(USE_GTK4)
     GdkAtom     gtk_sel_atom;	// PRIMARY/CLIPBOARD selection ID
 # endif
 
@@ -3100,5 +3109,18 @@ long elapsed(DWORD start_tick);
 
 // Flags used by getvcol()
 #define GETVCOL_END_EXCL_LBR	1
+
+// Used by expand_env_esc() callers that feed the result to
+// wildcard expansion, so that such characters embedded in
+// environment variable values are treated as literal.
+#ifdef VMS
+# define PATH_ESC_WILDCARDS	"*?%"
+#else
+# ifdef MSWIN
+#  define PATH_ESC_WILDCARDS	"*?["
+# else
+#  define PATH_ESC_WILDCARDS	"*?[{"
+# endif
+#endif
 
 #endif // VIM__H

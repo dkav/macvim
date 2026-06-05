@@ -1412,6 +1412,18 @@ endfunc
 
 func Test_popup_option_values()
   new
+  " Save old values
+  let save_g_so = &g:so
+  let save_l_so = &l:so
+  let save_g_sop = &g:sop
+  let save_l_sop = &l:sop
+
+  let save_nu = &l:nu
+  let save_wrap = &l:wrap
+  let save_ofu = &l:ofu
+  let save_path = &l:path
+  let save_stl = &l:stl
+
   " window-local
   setlocal number
   setlocal nowrap
@@ -1421,6 +1433,8 @@ func Test_popup_option_values()
   setlocal path=/there
   " global/window-local
   setlocal statusline=2
+  set scrolloff=5
+  set scrolloffpad=1
 
   let winid = popup_create('hello', {})
   call assert_equal(0, getwinvar(winid, '&number'))
@@ -1429,12 +1443,27 @@ func Test_popup_option_values()
   call assert_equal(&g:path, getwinvar(winid, '&path'))
   call assert_equal(&g:statusline, getwinvar(winid, '&statusline'))
 
-  " 'scrolloff' is reset to zero
+  " 'scrolloff' and 'scrolloffpad' are reset to zero
   call assert_equal(5, &scrolloff)
   call assert_equal(0, getwinvar(winid, '&scrolloff'))
+  call assert_equal(1, &scrolloffpad)
+  call assert_equal(0, getwinvar(winid, '&scrolloffpad'))
 
   call popup_close(winid)
-  bwipe
+
+  " Restore old values
+  let &g:so = save_g_so
+  let &l:so = save_l_so
+  let &g:sop = save_g_sop
+  let &l:sop = save_l_sop
+
+  let &l:nu = save_nu
+  let &l:wrap = save_wrap
+  let &l:ofu = save_ofu
+  let &l:path = save_path
+  let &l:stl = save_stl
+
+  bwipe!
 endfunc
 
 func Test_popup_atcursor()
@@ -2534,6 +2563,32 @@ func Test_popup_settext()
   call StopVimInTerminal(buf)
 endfunc
 
+func Test_popup_settext_scrollbar_disappear()
+  CheckScreendump
+
+  let lines =<< trim END
+    let g:p = popup_create(repeat(['hello world'], 30), #{
+          \ line: 3,
+          \ col: 5,
+          \ pos: 'topleft',
+          \ minheight: 10,
+          \ maxheight: 10,
+          \ minwidth: 30,
+          \ border: [1, 1, 1, 1],
+          \ })
+  END
+  call writefile(lines, 'XtestPopupScrollDisappear', 'D')
+  let buf = RunVimInTerminal('-S XtestPopupScrollDisappear', #{rows: 15, cols: 50})
+  call VerifyScreenDump(buf, 'Test_popup_settext_scrollbar_disappear_1', {})
+
+  " Shrinking the buffer makes the scrollbar disappear.  The right border
+  " column must not leave stray characters where the scrollbar used to be.
+  call term_sendkeys(buf, ":call popup_settext(g:p, ['short'])\<CR>")
+  call VerifyScreenDump(buf, 'Test_popup_settext_scrollbar_disappear_2', {})
+
+  call StopVimInTerminal(buf)
+endfunc
+
 func Test_popup_settext_getline()
   let id = popup_create('', #{ tabpage: 0 })
   call popup_settext(id, ['a','b'])
@@ -3086,7 +3141,7 @@ func Test_popupwin_with_buffer_and_filter()
   call assert_equal(1, popup_getpos(winid).firstline)
   redraw
   call feedkeys("G", 'xt')
-  call assert_equal(99, popup_getpos(winid).firstline)
+  call assert_equal(96, popup_getpos(winid).firstline)
 
   call popup_close(winid)
   exe 'bwipe! ' .. bufnr
@@ -4467,6 +4522,222 @@ func Test_popup_setoptions_other_tab()
   call prop_type_delete('textprop')
 endfunc
 
+func Test_popup_clipwindow_option()
+  " Default: clipwindow is off.
+  let id = popup_create('TEST', #{})
+  call assert_equal(0, popup_getoptions(id).clipwindow)
+  call popup_close(id)
+
+  " popup_create() honours the option.
+  let id = popup_create('TEST', #{clipwindow: v:true})
+  call assert_equal(1, popup_getoptions(id).clipwindow)
+
+  " popup_setoptions() can toggle it off and on.
+  call popup_setoptions(id, #{clipwindow: v:false})
+  call assert_equal(0, popup_getoptions(id).clipwindow)
+  call popup_setoptions(id, #{clipwindow: v:true})
+  call assert_equal(1, popup_getoptions(id).clipwindow)
+
+  call popup_close(id)
+endfunc
+
+func Test_popup_clipwindow_hide_when_prop_off_screen()
+  " A "clipwindow" popup attached to a textprop should be hidden once the
+  " host window scrolls so the textprop is far enough off-screen that even
+  " the partially-clipped popup would no longer overlap, and unhidden again
+  " when the prop scrolls back into reach.
+  call prop_type_add('clipprop', {})
+  new
+  call setline(1, range(1, 200)->mapnew({_, v -> 'line ' .. v}))
+  call prop_add(5, 1, #{type: 'clipprop', length: 5})
+  let host = win_getid()
+
+  let id = popup_create('attached', #{
+        \ textprop: 'clipprop',
+        \ textpropwin: host,
+        \ line: -1,
+        \ wrap: v:false,
+        \ fixed: v:true,
+        \ clipwindow: v:true,
+        \ })
+  redraw
+  call assert_equal(1, popup_getpos(id).visible)
+
+  " Scroll the host so the prop is far below topline; popup hides.
+  call win_execute(host, 'normal! Gzb')
+  redraw
+  call assert_equal(0, popup_getpos(id).visible)
+
+  " Scroll back so the prop is on the first visible line; popup unhides.
+  call win_execute(host, 'normal! ggzt')
+  redraw
+  call assert_equal(1, popup_getpos(id).visible)
+
+  call popup_close(id)
+  bwipe!
+  call prop_type_delete('clipprop')
+endfunc
+
+func Test_popup_clipwindow_top_clip()
+  CheckScreendump
+
+  let lines =<< trim END
+      vim9script
+      set nowrap
+      :botright new
+      :resize 6
+      setline(1, range(1, 30)->mapnew((_, v) => 'host line ' .. v))
+      prop_type_add('clipprop', {})
+      prop_add(2, 1, {type: 'clipprop', length: 4})
+      popup_create(['popup A', 'popup B', 'popup C'], {
+          textprop: 'clipprop',
+          line: -4,
+          col: 0,
+          border: [],
+          padding: [0, 1, 0, 1],
+          highlight: 'PmenuSel',
+          wrap: false,
+          fixed: true,
+          posinvert: false,
+          clipwindow: true,
+      })
+  END
+  call writefile(lines, 'XtestPopupClipwindowTop', 'D')
+  let buf = RunVimInTerminal('-S XtestPopupClipwindowTop', #{rows: 14, cols: 40})
+  call VerifyScreenDump(buf, 'Test_popup_clipwindow_top_clip', {})
+
+  call StopVimInTerminal(buf)
+endfunc
+
+func Test_popup_clipwindow_bottom_clip()
+  CheckScreendump
+
+  let lines =<< trim END
+      vim9script
+      set nowrap
+      :topleft new
+      :resize 6
+      setline(1, range(1, 30)->mapnew((_, v) => 'host line ' .. v))
+      prop_type_add('clipprop', {})
+      prop_add(2, 1, {type: 'clipprop', length: 4})
+      popup_create(['popup A', 'popup B', 'popup C'], {
+          textprop: 'clipprop',
+          line: 1,
+          col: 0,
+          border: [],
+          padding: [0, 1, 0, 1],
+          highlight: 'PmenuSel',
+          wrap: false,
+          fixed: true,
+          posinvert: false,
+          clipwindow: true,
+      })
+  END
+  call writefile(lines, 'XtestPopupClipwindowBottom', 'D')
+  let buf = RunVimInTerminal('-S XtestPopupClipwindowBottom', #{rows: 14, cols: 40})
+  call VerifyScreenDump(buf, 'Test_popup_clipwindow_bottom_clip', {})
+
+  call StopVimInTerminal(buf)
+endfunc
+
+func Test_popup_clipwindow_left_clip()
+  CheckScreendump
+
+  let lines =<< trim END
+      vim9script
+      set nowrap
+      :vert botright new
+      :vert resize 22
+      set laststatus=0
+      setline(1, repeat(['host content line abcdef'], 20))
+      prop_type_add('clipprop', {})
+      prop_add(5, 6, {type: 'clipprop', length: 4})
+      popup_create(['popup A', 'popup B', 'popup C'], {
+          textprop: 'clipprop',
+          line: 0,
+          col: -10,
+          border: [],
+          padding: [0, 1, 0, 1],
+          highlight: 'PmenuSel',
+          wrap: false,
+          fixed: true,
+          posinvert: false,
+          clipwindow: true,
+      })
+  END
+  call writefile(lines, 'XtestPopupClipwindowLeft', 'D')
+  let buf = RunVimInTerminal('-S XtestPopupClipwindowLeft', #{rows: 14, cols: 50})
+  call VerifyScreenDump(buf, 'Test_popup_clipwindow_left_clip', {})
+
+  call StopVimInTerminal(buf)
+endfunc
+
+func Test_popup_clipwindow_right_clip()
+  CheckScreendump
+
+  let lines =<< trim END
+      vim9script
+      set nowrap
+      :vert topleft new
+      :vert resize 22
+      set laststatus=0
+      setline(1, repeat(['host content line abcdef'], 20))
+      prop_type_add('clipprop', {})
+      prop_add(5, 14, {type: 'clipprop', length: 4})
+      popup_create(['popup A', 'popup B', 'popup C'], {
+          textprop: 'clipprop',
+          line: 0,
+          col: 0,
+          border: [],
+          padding: [0, 1, 0, 1],
+          highlight: 'PmenuSel',
+          wrap: false,
+          fixed: true,
+          posinvert: false,
+          clipwindow: true,
+      })
+  END
+  call writefile(lines, 'XtestPopupClipwindowRight', 'D')
+  let buf = RunVimInTerminal('-S XtestPopupClipwindowRight', #{rows: 14, cols: 50})
+  call VerifyScreenDump(buf, 'Test_popup_clipwindow_right_clip', {})
+
+  call StopVimInTerminal(buf)
+endfunc
+
+func Test_popup_clipwindow_hidden()
+  CheckScreendump
+
+  let lines =<< trim END
+      vim9script
+      set nowrap
+      :topleft new
+      :resize 6
+      setline(1, range(1, 50)->mapnew((_, v) => 'host line ' .. v))
+      prop_type_add('clipprop', {})
+      prop_add(2, 1, {type: 'clipprop', length: 4})
+      popup_create(['popup A', 'popup B', 'popup C'], {
+          textprop: 'clipprop',
+          line: -4,
+          col: 0,
+          border: [],
+          padding: [0, 1, 0, 1],
+          highlight: 'PmenuSel',
+          wrap: false,
+          fixed: true,
+          posinvert: false,
+          clipwindow: true,
+      })
+      # Scroll the host so the textprop is far below topline; the popup is
+      # then hidden because the prop has scrolled out of the host window.
+      win_execute(win_getid(), 'normal! Gzb')
+  END
+  call writefile(lines, 'XtestPopupClipwindowHidden', 'D')
+  let buf = RunVimInTerminal('-S XtestPopupClipwindowHidden', #{rows: 14, cols: 40})
+  call VerifyScreenDump(buf, 'Test_popup_clipwindow_hidden', {})
+
+  call StopVimInTerminal(buf)
+endfunc
+
 func Test_popup_prop_not_visible()
   CheckScreendump
 
@@ -4909,6 +5180,32 @@ func Test_popup_opacity_zero()
   call StopVimInTerminal(buf)
 endfunc
 
+func Test_popup_opacity_terminal_no_freeze()
+  CheckFeature terminal
+  CheckUnix
+  let g:test_is_flaky = 1
+
+  let origwin = win_getid()
+  let termbuf = term_start(&shell, #{hidden: 1})
+  let winid = popup_create(termbuf, #{minwidth: 40, minheight: 10,
+        \ border: [1, 1, 1, 1], opacity: 10})
+  call WaitForAssert({-> assert_equal("run", job_status(term_getjob(termbuf)))})
+  call WaitForAssert({-> assert_equal(' ', screenstring(screenrow(), screencol() - 1))})
+
+  " Before the fix typing froze Vim: redraw under an opacity popup raised
+  " must_redraw every cycle, trapping terminal_loop in its redraw loop.
+  call feedkeys('x', 'xt')
+  call term_wait(termbuf)
+  redraw
+  call WaitForAssert({-> assert_equal('x', screenstring(screenrow(), screencol() - 1))})
+
+  call feedkeys("\<BS>", 'xt')
+  call feedkeys("exit\<CR>", 'xt')
+  call WaitForAssert({-> assert_equal("dead", job_status(term_getjob(termbuf)))})
+  call feedkeys(":quit\<CR>", 'xt')
+  call assert_equal(origwin, win_getid())
+endfunc
+
 func Test_popup_getwininfo_tabnr()
   tab split
   let winid1 = popup_create('sup', #{tabpage: 1})
@@ -4932,6 +5229,7 @@ func Test_popup_opacity_wide_char_overlap()
   " higher-zindex popup are properly blended (no holes or missing chars).
   let lines =<< trim END
     set encoding=utf-8
+    set termguicolors
     for i in range(1, 20)
       call setline(i, 'いえーーーーーーーーーーーーーーーーい! ' .. i)
     endfor
@@ -4939,7 +5237,7 @@ func Test_popup_opacity_wide_char_overlap()
     hi MyPopup2 ctermbg=darkred ctermfg=white
     let g:p1 = popup_create(['あめんぼ赤いな','あいうえお'], #{
         \ opacity: 50,
-        \ line: 6,
+        \ line: 3,
         \ col: 4,
         \ border: [],
         \ borderchars: ['─','│','─','│','╭','╮','╯','╰'],
@@ -4950,7 +5248,7 @@ func Test_popup_opacity_wide_char_overlap()
         \})
     let g:p2 = popup_create(['カラフルな','ポップアップで','最上川'], #{
         \ opacity: 50,
-        \ line: 4,
+        \ line: 1,
         \ col: 3,
         \ minwidth: 15,
         \ minheight: 3,
@@ -4963,9 +5261,9 @@ func Test_popup_opacity_wide_char_overlap()
   let buf = RunVimInTerminal('-S XtestPopupOpacityWide', #{rows: 15, cols: 45})
   call VerifyScreenDump(buf, 'Test_popupwin_opacity_wide_1', {})
 
-  " Move popups far apart so they don't overlap.
-  " Tests right edge of popup where wide chars span content/padding boundary.
-  call term_sendkeys(buf, ":call popup_move(g:p2, #{line: 14, col: 16})\<CR>")
+  " Move p2 so it partially overlaps with p1 at a different position.
+  " Tests wide chars at the overlap boundary of two opacity popups.
+  call term_sendkeys(buf, ":call popup_move(g:p2, #{line: 6, col: 16})\<CR>")
   call TermWait(buf)
   call term_sendkeys(buf, ":\<CR>")
   call VerifyScreenDump(buf, 'Test_popupwin_opacity_wide_2', {})
@@ -5064,6 +5362,40 @@ func Test_popup_opacity_vsplit()
   call StopVimInTerminal(buf)
 endfunc
 
+func Test_popup_opacity_textprop_undercurl()
+  CheckScreendump
+
+  " hl_blend_attr() treated the CTERMCOLOR sentinel as a real near-white
+  " color, leaking white bg onto textprop-covered cells under an opacity
+  " popup.  Triggered by a textprop hl that only sets guisp.
+  let lines =<< trim END
+    set termguicolors
+    set t_Cs= t_Ce=
+    call setline(1, ['aaa bbb ccc ddd eee fff ggg hhh',
+          \ 'iii jjj kkk lll mmm nnn ooo ppp',
+          \ 'qqq rrr sss ttt uuu vvv www xxx',
+          \ 'yyy zzz 111 222 333 444 555 666'])
+    hi MyError guisp=#ec7279
+    call prop_type_add('mytype', #{highlight: 'MyError', combine: 1})
+    for s:l in range(1, line('$'))
+      call prop_add(s:l, 5, #{type: 'mytype', length: 20})
+    endfor
+    hi PanelBg guibg=#0b1021 guifg=#e5e9f0
+    call popup_create(['POPUP CONTENT', '             ', '   middle    '], #{
+          \ line: 1, col: 10,
+          \ minwidth: 30, minheight: 3,
+          \ opacity: 35,
+          \ highlight: 'PanelBg',
+          \ zindex: 200,
+          \ })
+  END
+  call writefile(lines, 'XtestPopupOpacityTextprop', 'D')
+  let buf = RunVimInTerminal('-S XtestPopupOpacityTextprop', #{rows: 8, cols: 50})
+  call VerifyScreenDump(buf, 'Test_popupwin_opacity_textprop_undercurl', {})
+
+  call StopVimInTerminal(buf)
+endfunc
+
 func Test_popup_close_b_nwindows()
   edit Xfoo
   setlocal bufhidden=wipe
@@ -5098,6 +5430,93 @@ func Test_popupwin_close_status_redraw()
   " close the popup and check the status line is redrawn
   call term_sendkeys(buf, ":call popup_close(winid)\<CR>")
   call VerifyScreenDump(buf, 'Test_popupwin_close_status_2', {})
+
+  call StopVimInTerminal(buf)
+endfunc
+
+func Test_popupwin_close_copen_redraw()
+  CheckMSWindows
+  CheckFeature quickfix
+
+  func! s:OpenPopup()
+    call popup_create(repeat(['ZZZZZZZZZ'], 10), #{
+          \ pos: 'botright',
+          \ col: &columns,
+          \ line: &lines,
+          \ filter: function('s:PopupFilter'),
+          \ })
+  endfunc
+  func! s:PopupFilter(winid, key)
+    if a:key ==# 'q'
+      call popup_close(a:winid)
+      copen
+    endif
+    return 1
+  endfunc
+
+  enew!
+  call setline(1, range(1, 30))
+  call setqflist(map(range(1, 20),
+        \ {_, v -> {'bufnr': bufnr('%'), 'lnum': v, 'col': 1, 'text': 'item ' .. v}}))
+
+  call s:OpenPopup()
+  redraw
+  call feedkeys('q', 'xt')
+  redraw
+  cclose
+  redraw
+
+  call s:OpenPopup()
+  redraw
+  call feedkeys('q', 'xt')
+  redraw
+
+  for row in range(&lines - 9, &lines)
+    let line = join(map(range(1, &columns), 'screenstring(row, v:val)'), '')
+    call assert_notmatch('Z', line)
+  endfor
+
+  cclose
+  bwipe!
+  delfunc s:OpenPopup
+  delfunc s:PopupFilter
+endfunc
+
+func Test_popup_opacity_fade_to_background()
+  CheckScreendump
+
+  " Opacity popup spanning a vertical split should redraw both windows
+  " underneath, not just the left one (blend accumulation bug).
+  let lines =<< trim END
+    call setline(1, repeat(['X   X   X   X   X'], 4))
+    hi PopupColor guibg=blue
+    let g:pop_id = popup_create(['Popup'], #{
+        \ line: 2, col: 3,
+        \ minwidth: 10,
+        \ minheight: 2,
+        \ highlight: 'PopupColor',
+        \ opacity: 60,
+        \ zindex: 50,
+        \})
+  END
+  call writefile(lines, 'XtestPopupOpacityFadeToBackground', 'D')
+  let buf = RunVimInTerminal('-S XtestPopupOpacityFadeToBackground', #{rows: 12, cols: 60})
+  " light background without Normal color set
+  call VerifyScreenDump(buf, 'Test_popupwin_opacity_fade_to_background_1', {})
+
+  " dark background without Normal color set
+  call term_sendkeys(buf, ":set background=dark\<CR>")
+  call VerifyScreenDump(buf, 'Test_popupwin_opacity_fade_to_background_2', {})
+
+  " light background with Normal cterm color set
+  call term_sendkeys(buf, ":set background=light\<CR>")
+  call term_sendkeys(buf, ":highlight Normal ctermfg=16 ctermbg=223\<CR>")
+  call VerifyScreenDump(buf, 'Test_popupwin_opacity_fade_to_background_3', {})
+
+  " light background with Normal gui color set
+  call term_sendkeys(buf, ":set termguicolors\<CR>")
+  call term_sendkeys(buf, ":highlight Normal ctermfg=NONE ctermbg=NONE guifg=#000000 guibg=#ffdab9\<CR>")
+  call VerifyScreenDump(buf, 'Test_popupwin_opacity_fade_to_background_4', {})
 
   call StopVimInTerminal(buf)
 endfunc
