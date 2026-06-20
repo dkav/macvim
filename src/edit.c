@@ -1242,7 +1242,21 @@ doESCkey:
 	case K_PAGEUP:
 	case K_KPAGEUP:
 	    if (pum_visible())
+	    {
+#ifdef FEAT_PROP_POPUP
+		// CTRL-SHIFT-<Up> scrolls the info popup up a line,
+		// CTRL-SHIFT-<PageUp> a page.  Shift is folded into K_S_UP but
+		// stays in mod_mask for PageUp, hence the asymmetric check.
+		if (c == K_S_UP ? (mod_mask & MOD_MASK_CTRL)
+			: ((mod_mask & MOD_MASK_CTRL)
+			    && (mod_mask & MOD_MASK_SHIFT)))
+		{
+		    popup_scroll_info(-1, c != K_S_UP);
+		    break;
+		}
+#endif
 		goto docomplete;
+	    }
 	    ins_pageup();
 	    break;
 
@@ -1259,7 +1273,19 @@ doESCkey:
 	case K_PAGEDOWN:
 	case K_KPAGEDOWN:
 	    if (pum_visible())
+	    {
+#ifdef FEAT_PROP_POPUP
+		// CTRL-SHIFT-<Down>/<PageDown> scroll the info popup down.
+		if (c == K_S_DOWN ? (mod_mask & MOD_MASK_CTRL)
+			: ((mod_mask & MOD_MASK_CTRL)
+			    && (mod_mask & MOD_MASK_SHIFT)))
+		{
+		    popup_scroll_info(1, c != K_S_DOWN);
+		    break;
+		}
+#endif
 		goto docomplete;
+	    }
 	    ins_pagedown();
 	    break;
 
@@ -1374,6 +1400,15 @@ doESCkey:
 
 	case Ctrl_P:	// Do previous/next pattern completion
 	case Ctrl_N:
+#ifdef FEAT_PROP_POPUP
+	    // CTRL-SHIFT-P/N scroll the info popup one line.
+	    if (pum_visible() && (mod_mask & MOD_MASK_SHIFT)
+		    && (c == Ctrl_P || c == Ctrl_N))
+	    {
+		popup_scroll_info(c == Ctrl_P ? -1 : 1, false);
+		break;
+	    }
+#endif
 	    // if 'complete' is empty then plain ^P is no longer special,
 	    // but it is under other ^X modes
 	    if (*curbuf->b_p_cpt == NUL
@@ -2644,6 +2679,8 @@ stop_insert(
 		curwin->w_cursor.col = strip_col;
 		for (;;)
 		{
+		    if (gchar_cursor() == NUL && curwin->w_cursor.col > 0)
+			--curwin->w_cursor.col;
 		    cc = gchar_cursor();
 		    if (!VIM_ISWHITE(cc))
 			break;

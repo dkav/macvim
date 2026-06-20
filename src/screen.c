@@ -468,6 +468,56 @@ skip_for_popup(int row, int col)
 }
 
 #ifdef FEAT_PROP_POPUP
+// Cells where ScreenLines[] was updated but terminal output was suppressed
+// because the cell was under an opacity popup.  For these cells the terminal
+// no longer matches ScreenLines[], so the "cell unchanged, skip output"
+// optimization must not be applied until they are output again.
+static char_u	*suppressed_cells = NULL;
+static int	suppressed_rows = 0;
+static int	suppressed_cols = 0;
+
+    static void
+mark_suppressed_cell(int row, int col)
+{
+    if (suppressed_cells == NULL
+	    || suppressed_rows != screen_Rows
+	    || suppressed_cols != screen_Columns)
+    {
+	vim_free(suppressed_cells);
+	suppressed_cells = alloc_clear(
+				   (size_t)screen_Rows * screen_Columns);
+	if (suppressed_cells == NULL)
+	{
+	    suppressed_rows = 0;
+	    suppressed_cols = 0;
+	    return;
+	}
+	suppressed_rows = screen_Rows;
+	suppressed_cols = screen_Columns;
+    }
+    suppressed_cells[row * suppressed_cols + col] = TRUE;
+}
+
+    static void
+unmark_suppressed_cell(int row, int col)
+{
+    if (suppressed_cells != NULL
+	    && row >= 0 && row < suppressed_rows
+	    && col >= 0 && col < suppressed_cols)
+	suppressed_cells[row * suppressed_cols + col] = FALSE;
+}
+
+    static int
+is_suppressed_cell(int row, int col)
+{
+    return suppressed_cells != NULL
+	&& row >= 0 && row < suppressed_rows
+	&& col >= 0 && col < suppressed_cols
+	&& suppressed_cells[row * suppressed_cols + col];
+}
+#endif
+
+#ifdef FEAT_PROP_POPUP
 /*
  * Cached attributes of the current opacity popup, computed once per
  * screen_line() to avoid recomputing them inside the per-cell loop.
@@ -695,6 +745,13 @@ screen_line(
 	redraw_this = redraw_next;
 	redraw_next = force || char_needs_redraw(off_from + char_cells,
 			      off_to + char_cells, endcol - col - char_cells);
+
+#ifdef FEAT_PROP_POPUP
+	// A cell whose output was suppressed under an opacity popup does not
+	// match the terminal even when ScreenLines[] is unchanged.
+	if (!redraw_this && is_suppressed_cell(row, col + coloff))
+	    redraw_this = TRUE;
+#endif
 
 #ifdef FEAT_GUI
 # ifdef FEAT_GUI_MSWIN
@@ -1083,7 +1140,11 @@ skip_opacity:
 	// blank out the rest of the line
 	while (col < clear_width && ScreenLines[off_to] == ' '
 						  && ScreenAttrs[off_to] == 0
-				  && (!enc_utf8 || ScreenLinesUC[off_to] == 0))
+				  && (!enc_utf8 || ScreenLinesUC[off_to] == 0)
+#ifdef FEAT_PROP_POPUP
+				  && !is_suppressed_cell(row, col + coloff)
+#endif
+				  )
 	{
 	    ScreenCols[off_to] =
 			      (flags & SLF_INC_VCOL) ? ++last_vcol : last_vcol;
@@ -1900,7 +1961,13 @@ screen_puts_len(
 			|| (ScreenLinesUC[off] != 0
 					  && screen_comp_differs(off, u8cc))))
 		|| ScreenAttrs[off] != cell_attr
-		|| exmode_active;
+		|| exmode_active
+#ifdef FEAT_PROP_POPUP
+		// Output was suppressed under an opacity popup: the terminal
+		// does not match ScreenLines[] even when unchanged.
+		|| is_suppressed_cell(row, col)
+#endif
+		;
 
 	if ((need_redraw || force_redraw_this) && !skip_for_popup(row, col))
 	{
@@ -2462,6 +2529,12 @@ screen_char(unsigned off, int row, int col)
 	    ScreenLinesUC[off2] = 0;
 	    screen_char(off2, row, col + 1);
 	}
+	mark_suppressed_cell(row, col);
+	if (enc_utf8 && ScreenLinesUC[off] != 0
+		&& utf_char2cells(ScreenLinesUC[off]) == 2
+		&& col + 1 < screen_Columns
+		&& popup_is_under_opacity(row, col + 1))
+	    mark_suppressed_cell(row, col + 1);
 	screen_cur_col = 9999;
 	return;
     }
@@ -2470,6 +2543,8 @@ screen_char(unsigned off, int row, int col)
 	    && col + 1 < screen_Columns
 	    && popup_is_under_opacity(row, col + 1))
     {
+	mark_suppressed_cell(row, col);
+	mark_suppressed_cell(row, col + 1);
 	screen_cur_col = 9999;
 	return;
     }
@@ -2502,6 +2577,14 @@ screen_char(unsigned off, int row, int col)
 	screen_stop_highlight();
 
     windgoto(row, col);
+
+#ifdef FEAT_PROP_POPUP
+    // The cell is output below, the terminal matches ScreenLines again.
+    unmark_suppressed_cell(row, col);
+    if (enc_utf8 && ScreenLinesUC[off] != 0
+	    && utf_char2cells(ScreenLinesUC[off]) == 2)
+	unmark_suppressed_cell(row, col + 1);
+#endif
 
     if (screen_attr != attr)
 	screen_start_highlight(attr);
@@ -2595,6 +2678,8 @@ screen_char_2(unsigned off, int row, int col)
     // If under a higher-zindex opacity popup, suppress output.
     if (popup_is_under_opacity(row, col))
     {
+	mark_suppressed_cell(row, col);
+	mark_suppressed_cell(row, col + 1);
 	screen_cur_col = 9999;
 	return;
     }
@@ -2604,6 +2689,9 @@ screen_char_2(unsigned off, int row, int col)
     // second byte directly.
     screen_char(off, row, col);
     out_char(ScreenLines[off + 1]);
+#ifdef FEAT_PROP_POPUP
+    unmark_suppressed_cell(row, col + 1);
+#endif
     ++screen_cur_col;
 }
 
@@ -2791,11 +2879,21 @@ screen_fill(
 	    // skip blanks (used often, keep it fast!)
 	    if (enc_utf8)
 		while (off < end_off && ScreenLines[off] == ' '
-			  && ScreenAttrs[off] == 0 && ScreenLinesUC[off] == 0)
+			  && ScreenAttrs[off] == 0 && ScreenLinesUC[off] == 0
+#ifdef FEAT_PROP_POPUP
+			  && !is_suppressed_cell(row,
+					      (int)(off - LineOffset[row]))
+#endif
+			  )
 		    ++off;
 	    else
 		while (off < end_off && ScreenLines[off] == ' '
-						     && ScreenAttrs[off] == 0)
+						     && ScreenAttrs[off] == 0
+#ifdef FEAT_PROP_POPUP
+			  && !is_suppressed_cell(row,
+					      (int)(off - LineOffset[row]))
+#endif
+			  )
 		    ++off;
 	    if (off < end_off)		// something to be cleared
 	    {
@@ -2808,6 +2906,10 @@ screen_fill(
 		while (col--)		// clear chars in ScreenLines
 		{
 		    space_to_screenline(off, 0);
+#ifdef FEAT_PROP_POPUP
+		    // T_CE cleared the terminal cell, it matches again.
+		    unmark_suppressed_cell(row, (int)(off - LineOffset[row]));
+#endif
 		    ++off;
 		}
 	    }
@@ -2831,6 +2933,13 @@ screen_fill(
 		    // comment on subpixel antialiasing)
 		    || (gui.in_use && col+1 < end_col
 						&& ScreenLines[off+1] != c)
+
+#endif
+#ifdef FEAT_PROP_POPUP
+		    // Output was suppressed under an opacity popup: the
+		    // terminal does not match ScreenLines[] even when
+		    // unchanged.
+		    || is_suppressed_cell(row, col)
 #endif
 		    )
 		    // Skip if under a(nother) popup.
@@ -3415,6 +3524,13 @@ give_up:
     screen_Rows = Rows;
     screen_Columns = Columns;
 
+#ifdef FEAT_GUI
+    // Cursor position may now be out of bounds after resize
+    if (gui.in_use && (gui.cursor_row >= screen_Rows
+		|| gui.cursor_col >= screen_Columns))
+	gui.cursor_is_valid = false;
+#endif
+
     set_must_redraw(UPD_CLEAR);	// need to clear the screen later
     if (doclear)
 	screenclear2(TRUE);
@@ -3478,6 +3594,9 @@ free_screenlines(void)
     VIM_CLEAR(popup_mask);
     VIM_CLEAR(popup_mask_next);
     VIM_CLEAR(popup_transparent);
+    VIM_CLEAR(suppressed_cells);
+    suppressed_rows = 0;
+    suppressed_cols = 0;
 #endif
 }
 
@@ -3542,6 +3661,12 @@ screenclear2(int doclear)
 	did_clear = TRUE;
 	clear_cmdline = FALSE;
 	mode_displayed = FALSE;
+#ifdef FEAT_PROP_POPUP
+	// The display was cleared, the terminal matches ScreenLines again.
+	if (suppressed_cells != NULL)
+	    vim_memset(suppressed_cells, 0,
+			       (size_t)suppressed_rows * suppressed_cols);
+#endif
     }
     else
     {

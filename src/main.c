@@ -1101,6 +1101,13 @@ common_init_2(mparm_T *paramp)
     gui.dofork = true;		    // default is to use fork()
 #endif
 
+#ifdef FEAT_CLIENTSERVER_BACKENDS
+    /*
+     * Check the $VIM_CLIENTSERVER env before we handle the --clientserver arg
+     */
+    check_clientserver_method_env();
+#endif
+
     /*
      * Do a first scan of the arguments in "argv[]":
      *   -display or --display
@@ -2118,7 +2125,11 @@ parse_command_name(mparm_T *parmp)
     }
 
     // "gvim" starts the GUI.  Also accept "Gvim" for MS-Windows.
-    if (TOLOWER_ASC(initstr[0]) == 'g')
+    if (TOLOWER_ASC(initstr[0]) == 'g'
+# ifdef VIMDLL
+	    || mch_is_gui_executable()
+# endif
+       )
     {
 	main_start_gui();
 # ifdef FEAT_GUI
