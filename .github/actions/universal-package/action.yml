@@ -60,6 +60,7 @@ runs:
         FORMULA_DIR="$(brew --repository)/Library/Taps/macvim-dev/homebrew-deps/Formula/"
         mkdir -p "$FORMULA_DIR"
         cp ${formula}.rb "$FORMULA_DIR"
+        brew trust macvim-dev/deps
 
         # Uninstall the already installed formula because we want to build our own
         brew uninstall --ignore-dependencies ${formula} || true
